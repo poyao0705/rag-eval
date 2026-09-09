@@ -6,7 +6,9 @@ settings:
 
 importers:
 
-  .:
+  .: {}
+
+  backend:
     dependencies:
       '@fastify/autoload':
         specifier: ^6.0.0

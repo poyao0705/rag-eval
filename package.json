@@ -1,0 +1,8 @@
+{
+    "scripts": {
+      "db:migrate": "pnpm --filter backend exec prisma migrate dev",
+      "db:generate": "pnpm --filter backend exec prisma generate",
+      "db:studio": "pnpm --filter backend exec prisma studio",
+      "dev": "pnpm --filter backend dev"
+    }
+  }

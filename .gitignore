@@ -3,3 +3,7 @@
 node_modules
 dist
 .pnpm-store
+.venv
+
+__pycache__
+compose.override.yaml

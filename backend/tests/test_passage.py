@@ -1,6 +1,6 @@
 import unittest
 
-from backend.passage import (
+from backend.scripts.helpers.passage import (
     deduplicate_candidates,
     extract_context,
     normalize_text,
@@ -54,9 +54,7 @@ class PassageTransformationTests(unittest.TestCase):
 
     def test_empty_normalized_sentence_block_is_rejected(self):
         with self.assertRaises(ValueError):
-            extract_context(
-                {"title": ["A"], "sentences": [["  ", "\t"]]}
-            )
+            extract_context({"title": ["A"], "sentences": [["  ", "\t"]]})
 
     def test_blank_sentences_do_not_change_canonical_text(self):
         with_blank = extract_context(

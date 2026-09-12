@@ -13,6 +13,7 @@ dependencies = [
     "fastapi[standard]>=0.141.1",
     "greenlet>=3.5.5",
     "logging>=0.4.9.6",
+    "openai>=2.0.0",
     "pgvector>=0.5.0",
     "psycopg[binary]>=3.3.5",
     "pydantic>=2.13.5",
@@ -26,6 +27,7 @@ dependencies = [
 backend = "backend:main"
 ingest = "backend.scripts.ingestion:main"
 build-passages = "backend.scripts.passages:main"
+embed-passages = "backend.scripts.embeddings:main"
 
 [tool.fastapi]
 entrypoint = "backend.main:app"

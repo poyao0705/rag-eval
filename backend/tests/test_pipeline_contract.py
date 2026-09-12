@@ -10,9 +10,19 @@ class PipelineContractTests(unittest.TestCase):
         readme = Path("../README.md").read_text()
         self.assertLess(readme.index("uv run ingest"), readme.index("uv run build-passages"))
 
-    def test_materializer_command_is_registered(self):
+    def test_materializer_and_embedding_commands_are_registered(self):
         pyproject = Path("pyproject.toml").read_text()
         self.assertIn('build-passages = "backend.scripts.passages:main"', pyproject)
+        self.assertIn('embed-passages = "backend.scripts.embeddings:main"', pyproject)
+
+    def test_readme_documents_embedding_after_passage_materialization(self):
+        readme = Path("../README.md").read_text()
+        self.assertIn("OPENAI_API_KEY", readme)
+        self.assertIn("uv run embed-passages", readme)
+        self.assertLess(
+            readme.index("uv run build-passages"),
+            readme.index("uv run embed-passages"),
+        )
 
     def test_passage_insert_fields_exclude_supporting_facts(self):
         row = HotpotQA(

@@ -14,10 +14,11 @@ A rag system with comprehensive eval + observability
 
 2. Go to the `backend` directory.
 3. Get `uv` if you don't have it already.
-4. Create a `.env` file with the database URL:
+4. Create a `.env` file with the database URL and OpenAI API key:
 
    ```env
    DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/deep_agents_rag
+   OPENAI_API_KEY=sk-your-key
    ```
 
 5. Install dependencies:
@@ -44,10 +45,17 @@ A rag system with comprehensive eval + observability
    uv run build-passages
    ```
 
+9. Embed materialized passages with OpenAI:
+
+   ```bash
+   uv run embed-passages
+   ```
+
 The `hotpot_qa` table remains the raw evaluation data. The passage materializer
 stores one unique normalized passage per identity in `source_passage`, while
 `hotpot_qa_context` limits retrieval to the original question's context
-candidates. Embeddings are a separate next step.
+candidates. `embed-passages` fills missing embeddings in resumable batches using
+`text-embedding-3-small`; rerunning it skips passages that already have vectors.
 
 ### HotpotQA passage sizing
 

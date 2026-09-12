@@ -34,3 +34,21 @@ class PassageMigrationTests(unittest.TestCase):
                 migration,
             )
         self.assertIn("type_=sa.String()", migration)
+
+    def test_search_vector_migration_adds_reversible_gin_index(self):
+        migration = Path(
+            "alembic/versions/f1a2b3c4d5e6_add_source_passage_search_vector.py"
+        ).read_text()
+
+        self.assertIn(
+            'down_revision: Union[str, Sequence[str], None] = "e7f9a1b3c5d7"',
+            migration,
+        )
+        self.assertIn('op.add_column(', migration)
+        self.assertIn('"source_passage"', migration)
+        self.assertIn('sa.Computed("to_tsvector', migration)
+        self.assertIn('"search_vector"', migration)
+        self.assertIn('"ix_source_passage_search_vector"', migration)
+        self.assertIn('postgresql_using="gin"', migration)
+        self.assertIn('op.drop_index(', migration)
+        self.assertIn('op.drop_column("source_passage", "search_vector")', migration)

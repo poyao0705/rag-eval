@@ -15,7 +15,7 @@ class PassageModelTests(unittest.TestCase):
         )
 
         self.assertIsInstance(passage.id, uuid.UUID)
-        constraints = SourcePassage.__table__.constraints
+        constraints = SourcePassage.__table__.constraints  # pyright: ignore[reportAttributeAccessIssue]
         self.assertIn(
             {"normalized_title", "content_hash"},
             [
@@ -25,10 +25,21 @@ class PassageModelTests(unittest.TestCase):
             ],
         )
 
+    def test_source_passage_has_stored_english_search_vector(self):
+        column = SourcePassage.__table__.c.search_vector  # pyright: ignore[reportAttributeAccessIssue]
+
+        self.assertEqual(column.type.__class__.__name__, "TSVECTOR")
+        self.assertIsNotNone(column.computed)
+        self.assertEqual(
+            str(column.computed.sqltext),
+            "to_tsvector('english', text)",
+        )
+        self.assertTrue(column.computed.persisted)
+
     def test_context_identity_preserves_question_and_position(self):
         primary_keys = {
             column.name
-            for column in HotpotQAContext.__table__.primary_key.columns
+            for column in HotpotQAContext.__table__.primary_key.columns  # pyright: ignore[reportAttributeAccessIssue]
         }
 
         self.assertEqual(primary_keys, {"hotpot_qa_id", "position"})

@@ -2,8 +2,8 @@ from enum import Enum
 from typing import Any
 import uuid
 
-from sqlalchemy import Column, Index, UniqueConstraint
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import Column, Computed, Index, UniqueConstraint
+from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlmodel import Field, SQLModel
 
 
@@ -27,7 +27,7 @@ class HotpotQA(SQLModel, table=True):
 
 
 class SourcePassage(SQLModel, table=True):
-    __tablename__ = "source_passage"
+    __tablename__ = "source_passage"  # pyright: ignore[reportAssignmentType]
     __table_args__ = (
         UniqueConstraint(
             "normalized_title",
@@ -35,6 +35,11 @@ class SourcePassage(SQLModel, table=True):
             name="uq_source_passage_identity",
         ),
         Index("ix_source_passage_content_hash", "content_hash"),
+        Index(
+            "ix_source_passage_search_vector",
+            "search_vector",
+            postgresql_using="gin",
+        ),
     )
 
     id: uuid.UUID = Field(default_factory=uuid.uuid7, primary_key=True)
@@ -44,11 +49,18 @@ class SourcePassage(SQLModel, table=True):
         sa_column=Column(JSONB, nullable=False)
     )
     text: str
+    search_vector: Any = Field(
+        default=None,
+        sa_column=Column(
+            TSVECTOR,
+            Computed("to_tsvector('english', text)", persisted=True),
+        ),
+    )
     content_hash: str
 
 
 class HotpotQAContext(SQLModel, table=True):
-    __tablename__ = "hotpot_qa_context"
+    __tablename__ = "hotpot_qa_context"  # pyright: ignore[reportAssignmentType]
     __table_args__ = (
         Index(
             "ix_hotpot_qa_context_retrieval",

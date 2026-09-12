@@ -122,6 +122,7 @@ async def run_live_evaluation() -> dict[str, Any]:
             report = new_report(cohort)
             write_report(report_path, report)
 
+            stage = "judge_construction"
             judge_key = os.environ.get("RAG_JUDGE_API_KEY")
             if not judge_key:
                 judge_key = settings.OPENAI_API_KEY.get_secret_value()

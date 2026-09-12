@@ -114,7 +114,17 @@ def build_judge(*, api_key: str, base_url: str | None = None):
 
 
 async def probe_judge(judge: Any) -> None:
-    """Perform the paid, opt-in structured-output compatibility probe."""
+    """Require native structured output before making the paid probe call."""
+    supports_structured_outputs = getattr(judge, "supports_structured_outputs", None)
+    if not callable(supports_structured_outputs):
+        raise ValueError(
+            "judge does not expose verified native structured-output capability"
+        )
+    if supports_structured_outputs() is not True:
+        raise ValueError(
+            "judge does not support native structured outputs; refusing fallback JSON parsing"
+        )
+
     parsed, _cost = await judge.a_generate(
         "Return a JSON object with ok set to true.", schema=JudgeProbe
     )

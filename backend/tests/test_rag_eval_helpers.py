@@ -7,7 +7,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import AsyncMock, call, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 from uuid import UUID
 
 from rag_eval.cohort import QAExample, load_cohort
@@ -290,6 +290,101 @@ class HarnessTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(saved["summary"]["bm25"]["faithfulness"]["error_count"], 1)
         self.assertEqual(graph.ainvoke.await_count, 1)
 
+    @staticmethod
+    def _live_resource_mocks():
+        settings = SimpleNamespace(
+            DATABASE_URL="postgresql+psycopg://db.example/rag",
+            OPENAI_API_KEY=SimpleNamespace(get_secret_value=lambda: "configured-key"),
+        )
+        engine = SimpleNamespace(dispose=AsyncMock())
+        session = SimpleNamespace(execute=AsyncMock())
+        session_context = MagicMock()
+        session_context.__aenter__ = AsyncMock(return_value=session)
+        session_context.__aexit__ = AsyncMock(return_value=None)
+        session_factory = MagicMock(return_value=session_context)
+        return settings, engine, session, session_factory
+
+    async def test_missing_index_stops_before_paid_calls_and_cleans_engine(self):
+        from test_rag import run_live_evaluation
+
+        settings, engine, session, session_factory = self._live_resource_mocks()
+        with TemporaryDirectory() as directory:
+            with (
+                patch("test_rag.DEFAULT_REPORT_PATH", Path(directory) / "results.json"),
+                patch("backend.core.config.Settings", return_value=settings),
+                patch("sqlalchemy.ext.asyncio.create_async_engine", return_value=engine),
+                patch("sqlalchemy.ext.asyncio.async_sessionmaker", return_value=session_factory),
+                patch("test_rag._verify_bm25_index", new=AsyncMock(side_effect=RuntimeError("missing index"))),
+                patch("test_rag.build_judge") as build_judge,
+                patch("openai.AsyncOpenAI") as async_openai,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "setup failed at database"):
+                    await run_live_evaluation()
+            saved = json.loads((Path(directory) / "results.json").read_text(encoding="utf-8"))
+
+        build_judge.assert_not_called()
+        async_openai.assert_not_called()
+        engine.dispose.assert_awaited_once()
+        self.assertEqual(saved["qa_ids"], [])
+        self.assertEqual(saved["errors"], [{"stage": "database", "type": "RuntimeError"}])
+        self.assertNotIn("missing index", json.dumps(saved))
+
+    async def test_invalid_cohort_stops_before_paid_calls_and_cleans_engine(self):
+        from test_rag import run_live_evaluation
+
+        settings, engine, session, session_factory = self._live_resource_mocks()
+        with TemporaryDirectory() as directory:
+            with (
+                patch("test_rag.DEFAULT_REPORT_PATH", Path(directory) / "results.json"),
+                patch("backend.core.config.Settings", return_value=settings),
+                patch("sqlalchemy.ext.asyncio.create_async_engine", return_value=engine),
+                patch("sqlalchemy.ext.asyncio.async_sessionmaker", return_value=session_factory),
+                patch("test_rag._verify_bm25_index", new=AsyncMock()),
+                patch("test_rag.load_cohort", new=AsyncMock(side_effect=ValueError("invalid cohort"))),
+                patch("test_rag.build_judge") as build_judge,
+                patch("openai.AsyncOpenAI") as async_openai,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "setup failed at cohort"):
+                    await run_live_evaluation()
+            saved = json.loads((Path(directory) / "results.json").read_text(encoding="utf-8"))
+
+        build_judge.assert_not_called()
+        async_openai.assert_not_called()
+        engine.dispose.assert_awaited_once()
+        self.assertEqual(saved["qa_ids"], [])
+        self.assertEqual(saved["errors"], [{"stage": "cohort", "type": "ValueError"}])
+        self.assertNotIn("invalid cohort", json.dumps(saved))
+
+    async def test_evaluation_failure_closes_client_and_disposes_engine(self):
+        from test_rag import run_live_evaluation
+
+        settings, engine, session, session_factory = self._live_resource_mocks()
+        client = SimpleNamespace()
+        client_context = MagicMock()
+        client_context.__aenter__ = AsyncMock(return_value=client)
+        client_context.__aexit__ = AsyncMock(return_value=None)
+        cohort = [QAExample("qa-1", "Question?", "Answer")]
+        with TemporaryDirectory() as directory:
+            with (
+                patch("test_rag.DEFAULT_REPORT_PATH", Path(directory) / "results.json"),
+                patch("backend.core.config.Settings", return_value=settings),
+                patch("sqlalchemy.ext.asyncio.create_async_engine", return_value=engine),
+                patch("sqlalchemy.ext.asyncio.async_sessionmaker", return_value=session_factory),
+                patch("test_rag._verify_bm25_index", new=AsyncMock()),
+                patch("test_rag.load_cohort", new=AsyncMock(return_value=cohort)),
+                patch("test_rag.build_judge", return_value=object()),
+                patch("test_rag.probe_judge", new=AsyncMock()),
+                patch("openai.AsyncOpenAI", return_value=client_context),
+                patch("test_rag.build_rag_graph", return_value=object()),
+                patch("test_rag.run_cases", new=AsyncMock(side_effect=RuntimeError("case failure"))),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "case failure"):
+                    await run_live_evaluation()
+
+        client_context.__aenter__.assert_awaited_once()
+        client_context.__aexit__.assert_awaited_once()
+        engine.dispose.assert_awaited_once()
+
     def test_live_collection_is_opt_in_and_does_not_import_database(self):
         env = os.environ.copy()
         for key in ("RUN_RAG_EVAL", "OPENAI_API_KEY", "DATABASE_URL"):
@@ -427,9 +522,16 @@ class ScoringTests(unittest.IsolatedAsyncioTestCase):
             model="gpt-5.6-luna", api_key="key", base_url="https://provider"
         )
 
+    async def test_probe_rejects_unverified_structured_output_before_paid_call(self):
+        judge = SimpleNamespace(a_generate=AsyncMock())
+        with self.assertRaisesRegex(ValueError, "native structured-output"):
+            await probe_judge(judge)
+        judge.a_generate.assert_not_awaited()
+
     async def test_probe_requires_a_parsed_true_response(self):
         good_judge = SimpleNamespace(
-            a_generate=AsyncMock(return_value=(JudgeProbe(ok=True), None))
+            supports_structured_outputs=lambda: True,
+            a_generate=AsyncMock(return_value=(JudgeProbe(ok=True), None)),
         )
         await probe_judge(good_judge)
         good_judge.a_generate.assert_awaited_once()
@@ -438,13 +540,15 @@ class ScoringTests(unittest.IsolatedAsyncioTestCase):
         )
 
         bad_judge = SimpleNamespace(
-            a_generate=AsyncMock(return_value=(JudgeProbe(ok=False), None))
+            supports_structured_outputs=lambda: True,
+            a_generate=AsyncMock(return_value=(JudgeProbe(ok=False), None)),
         )
         with self.assertRaises(ValueError):
             await probe_judge(bad_judge)
 
         broken_judge = SimpleNamespace(
-            a_generate=AsyncMock(side_effect=RuntimeError("provider failure"))
+            supports_structured_outputs=lambda: True,
+            a_generate=AsyncMock(side_effect=RuntimeError("provider failure")),
         )
         with self.assertRaisesRegex(RuntimeError, "provider failure"):
             await probe_judge(broken_judge)

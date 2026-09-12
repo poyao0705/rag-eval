@@ -1,9 +1,9 @@
 import argparse
 import asyncio
+import uuid
 from collections.abc import Iterable
 from dataclasses import dataclass
 from itertools import batched
-import uuid
 
 from sqlalchemy import select, tuple_
 from sqlalchemy.dialects.postgresql import insert
@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.db.database import SessionFactory
 from backend.db.models import HotpotQA, HotpotQAContext, SourcePassage
-from backend.passage import extract_context
+from backend.scripts.helpers.passage import extract_context
 
 IDENTITY_LOOKUP_BATCH_SIZE = 500
 
@@ -141,9 +141,7 @@ async def materialize_passages(
                 link_statement = (
                     insert(HotpotQAContext)
                     .values(link_rows)
-                    .on_conflict_do_nothing(
-                        index_elements=["hotpot_qa_id", "position"]
-                    )
+                    .on_conflict_do_nothing(index_elements=["hotpot_qa_id", "position"])
                     .returning(
                         HotpotQAContext.hotpot_qa_id,
                         HotpotQAContext.position,

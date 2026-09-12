@@ -1,7 +1,7 @@
+import unicodedata
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from hashlib import sha256
-import unicodedata
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,35 +30,33 @@ def normalize_title(value: str) -> str:
 
 def extract_context(context: object) -> list[PassageCandidate]:
     if not isinstance(context, Mapping):
-        raise ValueError("context must be a mapping")
+        raise TypeError("context must be a mapping")
     if "title" not in context or "sentences" not in context:
         raise ValueError("context must contain title and sentences")
 
     titles = context["title"]
     sentence_blocks = context["sentences"]
     if not isinstance(titles, Sequence) or isinstance(titles, (str, bytes)):
-        raise ValueError("title must be a sequence")
+        raise TypeError("title must be a sequence")
     if not isinstance(sentence_blocks, Sequence) or isinstance(
         sentence_blocks, (str, bytes)
     ):
-        raise ValueError("sentences must be a sequence")
+        raise TypeError("sentences must be a sequence")
     if len(titles) != len(sentence_blocks):
         raise ValueError("title and sentences must have equal lengths")
 
     passages: list[PassageCandidate] = []
     for title, block in zip(titles, sentence_blocks):
         if not isinstance(title, str):
-            raise ValueError("every title must be a string")
+            raise TypeError("every title must be a string")
         if not isinstance(block, Sequence) or isinstance(block, (str, bytes)):
-            raise ValueError("every sentence block must be a sequence of strings")
+            raise TypeError("every sentence block must be a sequence of strings")
         if any(not isinstance(sentence, str) for sentence in block):
             raise ValueError("every sentence must be a string")
 
         normalized_title = normalize_title(title)
         normalized_sentences = tuple(normalize_text(sentence) for sentence in block)
-        text = " ".join(
-            sentence for sentence in normalized_sentences if sentence
-        )
+        text = " ".join(sentence for sentence in normalized_sentences if sentence)
         if not normalized_title or not text:
             raise ValueError("title and text must not be empty after normalization")
         content_hash = sha256(text.encode("utf-8")).hexdigest()

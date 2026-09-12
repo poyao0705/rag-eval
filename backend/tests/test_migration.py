@@ -35,6 +35,25 @@ class PassageMigrationTests(unittest.TestCase):
             )
         self.assertIn("type_=sa.String()", migration)
 
+    def test_embedding_migration_adds_reversible_cosine_hnsw_index(self):
+        migration = Path(
+            "alembic/versions/a9b8c7d6e5f4_add_source_passage_embedding.py"
+        ).read_text()
+
+        self.assertIn(
+            'down_revision: Union[str, Sequence[str], None] = "f1a2b3c4d5e6"',
+            migration,
+        )
+        self.assertIn('op.add_column(', migration)
+        self.assertIn('"source_passage"', migration)
+        self.assertIn('"embedding"', migration)
+        self.assertIn('Vector(1536)', migration)
+        self.assertIn('"source_passage_embedding_hnsw_idx"', migration)
+        self.assertIn('postgresql_using="hnsw"', migration)
+        self.assertIn('"embedding": "vector_cosine_ops"', migration)
+        self.assertIn('op.drop_index(', migration)
+        self.assertIn('op.drop_column("source_passage", "embedding")', migration)
+
     def test_search_vector_migration_adds_reversible_gin_index(self):
         migration = Path(
             "alembic/versions/f1a2b3c4d5e6_add_source_passage_search_vector.py"

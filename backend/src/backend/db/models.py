@@ -2,6 +2,7 @@ from enum import Enum
 from typing import Any
 import uuid
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import Column, Computed, Index, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlmodel import Field, SQLModel
@@ -40,6 +41,12 @@ class SourcePassage(SQLModel, table=True):
             "search_vector",
             postgresql_using="gin",
         ),
+        Index(
+            "source_passage_embedding_hnsw_idx",
+            "embedding",
+            postgresql_using="hnsw",
+            postgresql_ops={"embedding": "vector_cosine_ops"},
+        ),
     )
 
     id: uuid.UUID = Field(default_factory=uuid.uuid7, primary_key=True)
@@ -57,6 +64,10 @@ class SourcePassage(SQLModel, table=True):
         ),
     )
     content_hash: str
+    embedding: list[float] | None = Field(
+        default=None,
+        sa_column=Column(Vector(1536), nullable=True),
+    )
 
 
 class HotpotQAContext(SQLModel, table=True):

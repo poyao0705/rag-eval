@@ -36,6 +36,23 @@ class PassageModelTests(unittest.TestCase):
         )
         self.assertTrue(column.computed.persisted)
 
+    def test_source_passage_has_nullable_1536_dimension_embedding(self):
+        column = SourcePassage.__table__.c.embedding  # pyright: ignore[reportAttributeAccessIssue]
+
+        self.assertEqual(column.type.__class__.__name__, "VECTOR")
+        self.assertEqual(column.type.dim, 1536)
+        self.assertTrue(column.nullable)
+        index = next(
+            index
+            for index in SourcePassage.__table__.indexes  # pyright: ignore[reportAttributeAccessIssue]
+            if index.name == "source_passage_embedding_hnsw_idx"
+        )
+        self.assertEqual(index.dialect_options["postgresql"]["using"], "hnsw")
+        self.assertEqual(
+            index.dialect_options["postgresql"]["ops"],
+            {"embedding": "vector_cosine_ops"},
+        )
+
     def test_context_identity_preserves_question_and_position(self):
         primary_keys = {
             column.name

@@ -1,6 +1,11 @@
 services:
   postgres:
-    image: pgvector/pgvector:0.8.6-pg17
+    build:
+      context: .
+      dockerfile: infra/db/Dockerfile
+      args:
+        PG_SEARCH_VERSION: "0.25.9"
+    image: deep-agents-rag-postgres:pg17-pg-search-0.25.9
     container_name: deep-agents-rag-postgres
     restart: unless-stopped
     ports:

@@ -8,9 +8,12 @@ from openai import AsyncOpenAI
 from sqlalchemy import select, update
 
 from backend.db.models import SourcePassage
+from backend.modules.retrieval.embeddings import (
+    EMBEDDING_DIMENSIONS,
+    EMBEDDING_MODEL,
+    validated_embeddings,
+)
 
-EMBEDDING_MODEL = "text-embedding-3-small"
-EMBEDDING_DIMENSIONS = 1536
 DEFAULT_BATCH_SIZE = 1000
 
 
@@ -18,29 +21,6 @@ DEFAULT_BATCH_SIZE = 1000
 class EmbeddingStats:
     selected_passages: int = 0
     embedded_passages: int = 0
-
-
-def _validated_embeddings(response: Any, expected_count: int) -> list[list[float]]:
-    data = list(response.data)
-    if len(data) != expected_count:
-        raise ValueError(
-            "embedding response count does not match requested passage count"
-        )
-
-    try:
-        ordered_data = sorted(data, key=lambda item: item.index)
-        indexes = [item.index for item in ordered_data]
-    except AttributeError as error:
-        raise ValueError("embedding response items must include an index") from error
-
-    if indexes != list(range(expected_count)):
-        raise ValueError("embedding response indexes are not contiguous and ordered")
-
-    embeddings = [item.embedding for item in ordered_data]
-    for embedding in embeddings:
-        if len(embedding) != EMBEDDING_DIMENSIONS:
-            raise ValueError(f"embedding dimension must be {EMBEDDING_DIMENSIONS}")
-    return embeddings
 
 
 async def embed_passages(
@@ -88,7 +68,7 @@ async def embed_passages(
                 model=EMBEDDING_MODEL,
                 input=[passage.text for passage in passages],
             )
-            embeddings = _validated_embeddings(response, len(passages))
+            embeddings = validated_embeddings(response, len(passages))
 
             async with session_factory.begin() as session:
                 for passage, embedding in zip(passages, embeddings, strict=True):

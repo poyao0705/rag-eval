@@ -8,8 +8,10 @@ It evaluates the same fixed 20-question validation cohort with each retriever
 sequentially (60 cases and five metrics per case).
 
 Before a paid run, verify that the configured provider supports the exact
-judge model `gpt-5.6-luna` and its structured-output interface. Provider
-compatibility or availability failures are configuration blockers; the
+judge model `gpt-5.4` and its structured-output interface. This explicitly
+pins DeepEval 4.2.2's recommended/default judge using its stock `OpenAIModel`,
+including native schema parsing; no model capability overrides are applied.
+Provider compatibility or availability failures are configuration blockers; the
 harness does not silently substitute another model. The existing BM25 index
 migration also requires explicit operator authorization. The generator uses
 `gpt-5-mini` and the configured OpenAI credentials. Do not put credentials in
@@ -31,7 +33,7 @@ costs more than 300 model calls even though it has 300 metric measurements.
 # Offline: no opt-in, no paid calls.
 cd backend
 uv sync --locked
-uv run pytest tests/test_rag_graph.py tests/test_rag_eval_helpers.py tests/test_rag.py -q
+uv run pytest tests/test_rag_graph.py tests/test_rag_eval_helpers.py tests/test_rag_eval_scoring.py tests/test_rag.py -q
 
 # Operator-only, after explicit DB migration authorization.
 uv run alembic current

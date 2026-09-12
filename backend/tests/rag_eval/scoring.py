@@ -21,7 +21,8 @@ from backend.modules.rag.graph import RAGState
 from rag_eval.cohort import QAExample
 
 
-JUDGE_MODEL = "gpt-5.6-luna"
+# DeepEval 4.2.2's recommended/default judge, pinned explicitly for this harness.
+JUDGE_MODEL = "gpt-5.4"
 
 
 class JudgeProbe(BaseModel):

@@ -175,7 +175,7 @@ class ReportTests(unittest.TestCase):
 
         self.assertEqual(saved["seed"], 42)
         self.assertEqual(saved["generator_model"], "gpt-5-mini")
-        self.assertEqual(saved["judge_model"], "gpt-5.6-luna")
+        self.assertEqual(saved["judge_model"], "gpt-5.4")
         self.assertEqual(saved["top_k"], 5)
         self.assertEqual(saved["qa_ids"], ["qa-1"])
         self.assertEqual(saved["cases"][0]["passage_ids"], [str(UUID(int=7))])
@@ -519,7 +519,7 @@ class ScoringTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIs(judge, constructor.return_value)
         constructor.assert_called_once_with(
-            model="gpt-5.6-luna", api_key="key", base_url="https://provider"
+            model="gpt-5.4", api_key="key", base_url="https://provider"
         )
 
     async def test_probe_rejects_unverified_structured_output_before_paid_call(self):

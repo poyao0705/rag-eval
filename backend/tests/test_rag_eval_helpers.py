@@ -1,10 +1,14 @@
 import json
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, patch
+from uuid import UUID
 
 from rag_eval.cohort import QAExample, load_cohort
+from rag_eval.report import case_record, new_report, summarize, write_report
 from rag_eval.scoring import (
     JudgeProbe,
     build_judge,
@@ -79,6 +83,104 @@ class CohortLoaderTests(unittest.IsolatedAsyncioTestCase):
         example = QAExample("qa-1", "Question?", "Answer")
         with self.assertRaises((AttributeError, TypeError)):
             setattr(example, "answer", "Changed")
+
+
+class ReportTests(unittest.TestCase):
+    def test_summarize_keeps_failed_measurements_out_of_the_mean(self):
+        cases = [
+            {
+                "retriever": "bm25",
+                "metrics": [
+                    {
+                        "name": "answer_relevancy",
+                        "score": 0.2,
+                        "error": None,
+                    }
+                ],
+                "error": None,
+            },
+            {
+                "retriever": "bm25",
+                "metrics": [
+                    {
+                        "name": "answer_relevancy",
+                        "score": None,
+                        "error": {"type": "TimeoutError"},
+                    }
+                ],
+                "error": None,
+            },
+        ]
+
+        summary = summarize(cases)
+
+        self.assertEqual(
+            summary["bm25"]["answer_relevancy"],
+            {"mean": 0.2, "scored_count": 1, "error_count": 1},
+        )
+        failures_only = summarize([cases[1]])
+        self.assertEqual(
+            failures_only["bm25"]["answer_relevancy"],
+            {"mean": None, "scored_count": 0, "error_count": 1},
+        )
+        self.assertEqual(
+            {
+                summary["attempted_case_count"],
+                summary["completed_case_count"],
+                summary["failed_case_count"],
+                summary["expected_case_count"],
+            },
+            {2, 2, 0, 60},
+        )
+
+    def test_write_report_round_trips_safe_partial_case_records(self):
+        qa = QAExample("qa-1", "Who?", "GOLD_SENTINEL")
+        passage = SimpleNamespace(passage_id=UUID(int=7))
+        state = {
+            "answer": "Actual",
+            "retrieved_passages": [passage],
+            "retrieval_context": ["First", "Second"],
+            "client": "CREDENTIAL_SENTINEL",
+        }
+        record = case_record(
+            qa,
+            "bm25",
+            cast(Any, state),
+            [
+                {
+                    "name": "answer_relevancy",
+                    "score": 0.2,
+                    "reason": "Low",
+                    "error": None,
+                    "client": "CREDENTIAL_SENTINEL",
+                },
+                {
+                    "name": "faithfulness",
+                    "score": None,
+                    "reason": None,
+                    "error": {"type": "TimeoutError"},
+                },
+            ],
+        )
+        report = new_report([qa])
+        report["cases"].append(record)
+
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "nested" / "results.json"
+            write_report(path, report)
+            saved = json.loads(path.read_text(encoding="utf-8"))
+
+        self.assertEqual(saved["seed"], 42)
+        self.assertEqual(saved["generator_model"], "gpt-5-mini")
+        self.assertEqual(saved["judge_model"], "gpt-5.6-luna")
+        self.assertEqual(saved["top_k"], 5)
+        self.assertEqual(saved["qa_ids"], ["qa-1"])
+        self.assertEqual(saved["cases"][0]["passage_ids"], [str(UUID(int=7))])
+        self.assertEqual(saved["cases"][0]["retrieval_context"], ["First", "Second"])
+        self.assertEqual(saved["cases"][0]["metrics"][1]["error"], {"type": "TimeoutError"})
+        self.assertNotIn("CREDENTIAL_SENTINEL", json.dumps(saved))
+        self.assertEqual(saved["summary"]["attempted_case_count"], 1)
+        self.assertEqual(saved["summary"]["completed_case_count"], 1)
 
 
 class ScoringTests(unittest.IsolatedAsyncioTestCase):

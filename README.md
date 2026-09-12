@@ -37,3 +37,14 @@ A rag system with comprehensive eval + observability
    ```bash
    uv run ingest
    ```
+
+8. Build the deduplicated, question-scoped passage corpus:
+
+   ```bash
+   uv run build-passages
+   ```
+
+The `hotpot_qa` table remains the raw evaluation data. The passage materializer
+stores one unique normalized passage per identity in `source_passage`, while
+`hotpot_qa_context` limits retrieval to the original question's context
+candidates. Embeddings are a separate next step.

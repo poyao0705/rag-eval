@@ -37,7 +37,7 @@ def upgrade() -> None:
         sa.Column("context", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.drop_table("_prisma_migrations")
+    op.drop_table("_prisma_migrations", if_exists=True)
     # ### end Alembic commands ###
 
 

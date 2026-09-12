@@ -6,7 +6,7 @@ A rag system with comprehensive eval + observability
 
 ### Database (PostgreSQL + ParadeDB)
 
-The repository uses ParadeDB's official PostgreSQL 17 image, which includes
+The repository uses ParadeDB's official PostgreSQL 18 image, which includes
 both `pgvector` and the `pg_search` extension. No host-level PostgreSQL
 extensions need to be installed.
 
@@ -19,7 +19,7 @@ docker compose up -d postgres
 On first initialization, ParadeDB's bootstrap creates the `vector`, `pg_search`,
 and related extensions, then the project init script creates `unaccent` in
 `deep_agents_rag`. The Compose command keeps ParadeDB's required extensions in
-`shared_preload_libraries` for both new and existing PostgreSQL 17 volumes.
+`shared_preload_libraries`.
 
 Verify the installation:
 
@@ -33,28 +33,24 @@ docker compose exec postgres \
   -c "SELECT extname, extversion FROM pg_extension WHERE extname IN ('vector', 'pg_search', 'unaccent') ORDER BY extname;"
 ```
 
-#### Existing database volumes
+#### Upgrading from PostgreSQL 17
 
-Scripts under `infra/db/init` run only when PostgreSQL initializes an empty data
-directory. Developers who created `postgres_data` before ParadeDB was added
-should recreate the container. Init scripts do not rerun for an existing data
-directory, so create `pg_search` manually only if it is not already present:
+PostgreSQL 17 data directories cannot be reused by PostgreSQL 18. This project
+uses a destructive reset for local development, so back up anything you need
+before removing the volume:
 
 ```bash
-docker compose up -d --force-recreate postgres
-docker compose exec postgres \
-  psql -U postgres -d deep_agents_rag \
-  -c "CREATE EXTENSION IF NOT EXISTS pg_search CASCADE;"
+# Destructive: deletes the local PostgreSQL database and all generated data.
+docker compose down -v --remove-orphans
+docker compose pull postgres
+docker compose up -d postgres
 ```
 
-This preserves the existing volume. Do not run `docker compose down -v` unless
-you intentionally want to delete all local database data.
-
-The official PG17 image currently bundles pgvector 0.8.4. An older volume may
-report a newer catalog version (the original local volume reports 0.8.6) and
-may emit a Debian collation-version warning. The current setup remains readable,
-but plan a dump/restore and collation refresh before treating this as a
-production image migration.
+The fresh PostgreSQL 18 data directory runs ParadeDB's bootstrap and the project
+init script automatically. Rerun the backend migrations, ingestion, passage
+materialization, and embedding steps below to recreate the application data.
+For data that must be preserved, use a PostgreSQL logical dump and restore
+instead of reusing the PostgreSQL 17 volume.
 
 #### Create and query a BM25 index
 
@@ -79,7 +75,7 @@ ORDER BY pdb.score(id) DESC, id ASC
 LIMIT 10;
 ```
 
-The official image is pinned by its PostgreSQL 17 tag and multi-architecture
+The official image is pinned by its PostgreSQL 18 tag and multi-architecture
 digest in `compose.yaml`. Update that image reference deliberately when
 upgrading ParadeDB.
 

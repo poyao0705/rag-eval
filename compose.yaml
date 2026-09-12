@@ -1,13 +1,11 @@
 services:
   postgres:
-    build:
-      context: .
-      dockerfile: infra/db/Dockerfile
-      args:
-        PG_SEARCH_VERSION: "0.25.9"
-    image: deep-agents-rag-postgres:pg17-pg-search-0.25.9
+    image: paradedb/paradedb:pg17@sha256:8da5d202fe31875af32a49e802ce17cfbc146b0672306f4109809efee1e6f916
     container_name: deep-agents-rag-postgres
     restart: unless-stopped
+    # Keep existing PostgreSQL 17 volumes compatible while retaining ParadeDB's
+    # required preload entries during first-time initialization.
+    command: ["postgres", "-c", "shared_preload_libraries=pg_search,pg_cron,pg_stat_statements"]
     ports:
       - "5432:5432"
     environment:
@@ -16,7 +14,8 @@ services:
       POSTGRES_DB: deep_agents_rag
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./infra/db/init:/docker-entrypoint-initdb.d
+      # Do not mask ParadeDB's bundled 10_bootstrap_paradedb.sh script.
+      - ./infra/db/init/20-extensions.sql:/docker-entrypoint-initdb.d/20-extensions.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d deep_agents_rag"]
       interval: 5s

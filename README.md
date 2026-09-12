@@ -6,18 +6,20 @@ A rag system with comprehensive eval + observability
 
 ### Database (PostgreSQL + ParadeDB)
 
-The repository builds a PostgreSQL 17 image with both `pgvector` and ParadeDB's
-`pg_search` extension. No host-level PostgreSQL extensions need to be installed.
+The repository uses ParadeDB's official PostgreSQL 17 image, which includes
+both `pgvector` and the `pg_search` extension. No host-level PostgreSQL
+extensions need to be installed.
 
-For a fresh checkout, build and start PostgreSQL from the repository root:
+For a fresh checkout, start PostgreSQL from the repository root:
 
 ```bash
-docker compose up -d --build postgres
+docker compose up -d postgres
 ```
 
-On first initialization, Docker automatically creates the `vector`, `pg_search`,
-and `unaccent` extensions in `deep_agents_rag`. The image also starts PostgreSQL
-with `pg_search` in `shared_preload_libraries`.
+On first initialization, ParadeDB's bootstrap creates the `vector`, `pg_search`,
+and related extensions, then the project init script creates `unaccent` in
+`deep_agents_rag`. The Compose command keeps ParadeDB's required extensions in
+`shared_preload_libraries` for both new and existing PostgreSQL 17 volumes.
 
 Verify the installation:
 
@@ -34,11 +36,12 @@ docker compose exec postgres \
 #### Existing database volumes
 
 Scripts under `infra/db/init` run only when PostgreSQL initializes an empty data
-directory. Developers who created `postgres_data` before ParadeDB was added must
-rebuild the container and create the extension once in the existing database:
+directory. Developers who created `postgres_data` before ParadeDB was added
+should recreate the container. Init scripts do not rerun for an existing data
+directory, so create `pg_search` manually only if it is not already present:
 
 ```bash
-docker compose up -d --build --force-recreate postgres
+docker compose up -d --force-recreate postgres
 docker compose exec postgres \
   psql -U postgres -d deep_agents_rag \
   -c "CREATE EXTENSION IF NOT EXISTS pg_search CASCADE;"
@@ -46,6 +49,12 @@ docker compose exec postgres \
 
 This preserves the existing volume. Do not run `docker compose down -v` unless
 you intentionally want to delete all local database data.
+
+The official PG17 image currently bundles pgvector 0.8.4. An older volume may
+report a newer catalog version (the original local volume reports 0.8.6) and
+may emit a Debian collation-version warning. The current setup remains readable,
+but plan a dump/restore and collation refresh before treating this as a
+production image migration.
 
 #### Create and query a BM25 index
 
@@ -70,8 +79,9 @@ ORDER BY pdb.score(id) DESC, id ASC
 LIMIT 10;
 ```
 
-The ParadeDB package version is pinned in `compose.yaml` and its release checksums
-are pinned in `infra/db/Dockerfile`. Update both when upgrading `pg_search`.
+The official image is pinned by its PostgreSQL 17 tag and multi-architecture
+digest in `compose.yaml`. Update that image reference deliberately when
+upgrading ParadeDB.
 
 ### Backend
 

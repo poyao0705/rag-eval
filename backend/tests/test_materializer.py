@@ -1,10 +1,30 @@
 import unittest
 
 from backend.db.models import HotpotQA, HotpotQASplit
-from backend.scripts.passages import build_passage_rows
+from backend.scripts.passages import (
+    IDENTITY_LOOKUP_BATCH_SIZE,
+    batch_identities,
+    build_passage_rows,
+)
 
 
 class MaterializerTests(unittest.TestCase):
+    def test_batch_identities_preserves_every_identity_with_a_bounded_size(self):
+        identities = [
+            (f"title-{index}", f"hash-{index}")
+            for index in range(IDENTITY_LOOKUP_BATCH_SIZE * 2 + 1)
+        ]
+
+        batches = list(batch_identities(identities))
+
+        self.assertEqual(
+            [identity for batch in batches for identity in batch],
+            identities,
+        )
+        self.assertTrue(
+            all(len(batch) <= IDENTITY_LOOKUP_BATCH_SIZE for batch in batches)
+        )
+
     def test_build_passage_rows_reuses_one_passage_for_two_questions(self):
         shared_context = {
             "title": ["Shared"],

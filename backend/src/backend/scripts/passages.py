@@ -2,6 +2,7 @@ import argparse
 import asyncio
 from collections.abc import Iterable
 from dataclasses import dataclass
+from itertools import batched
 import uuid
 
 from sqlalchemy import select, tuple_
@@ -12,6 +13,8 @@ from backend.db.database import SessionFactory
 from backend.db.models import HotpotQA, HotpotQAContext, SourcePassage
 from backend.passage import extract_context
 
+IDENTITY_LOOKUP_BATCH_SIZE = 500
+
 
 @dataclass
 class MaterializationStats:
@@ -20,6 +23,12 @@ class MaterializationStats:
     inserted_passages: int = 0
     candidate_links: int = 0
     inserted_links: int = 0
+
+
+def batch_identities(
+    identities: Iterable[tuple[str, str]],
+) -> Iterable[tuple[tuple[str, str], ...]]:
+    return batched(identities, IDENTITY_LOOKUP_BATCH_SIZE)
 
 
 def build_passage_rows(
@@ -98,22 +107,26 @@ async def materialize_passages(
                     (row["normalized_title"], row["content_hash"])
                     for row in passage_rows
                 ]
-                source_rows = await session.execute(
-                    select(
-                        SourcePassage.normalized_title,
-                        SourcePassage.content_hash,
-                        SourcePassage.id,
-                    ).where(
-                        tuple_(
+                identity_to_id = {}
+                for identity_batch in batch_identities(identities):
+                    source_rows = await session.execute(
+                        select(
                             SourcePassage.normalized_title,
                             SourcePassage.content_hash,
-                        ).in_(identities)
+                            SourcePassage.id,
+                        ).where(
+                            tuple_(
+                                SourcePassage.normalized_title,
+                                SourcePassage.content_hash,
+                            ).in_(identity_batch)
+                        )
                     )
-                )
-                identity_to_id = {
-                    (normalized_title, content_hash): source_id
-                    for normalized_title, content_hash, source_id in source_rows
-                }
+                    identity_to_id.update(
+                        {
+                            (normalized_title, content_hash): source_id
+                            for normalized_title, content_hash, source_id in source_rows
+                        }
+                    )
                 candidate_identities = {
                     row["id"]: (row["normalized_title"], row["content_hash"])
                     for row in passage_rows

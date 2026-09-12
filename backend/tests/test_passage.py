@@ -54,4 +54,18 @@ class PassageTransformationTests(unittest.TestCase):
 
     def test_empty_normalized_sentence_block_is_rejected(self):
         with self.assertRaises(ValueError):
-            extract_context({"title": ["A"], "sentences": [["  "]]})
+            extract_context(
+                {"title": ["A"], "sentences": [["  ", "\t"]]}
+            )
+
+    def test_blank_sentences_do_not_change_canonical_text(self):
+        with_blank = extract_context(
+            {"title": ["A"], "sentences": [["One.", "  ", "Two."]]}
+        )[0]
+        without_blank = extract_context(
+            {"title": ["A"], "sentences": [["One.", "Two."]]}
+        )[0]
+
+        self.assertEqual(with_blank.sentences, ("One.", "  ", "Two."))
+        self.assertEqual(with_blank.text, "One. Two.")
+        self.assertEqual(with_blank.identity, without_blank.identity)

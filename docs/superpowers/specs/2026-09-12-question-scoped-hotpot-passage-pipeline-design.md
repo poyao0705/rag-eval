@@ -60,7 +60,7 @@ For each title and sentence:
 1. Apply Unicode NFKC normalization.
 2. Remove soft hyphens.
 3. Collapse runs of whitespace and strip the result.
-4. Join normalized sentences with one space for `text`.
+4. Drop empty normalized sentence elements, then join the remaining sentences with one space for `text`.
 5. Case-fold the normalized title for `normalized_title`.
 6. Hash the UTF-8 `text` with SHA-256.
 

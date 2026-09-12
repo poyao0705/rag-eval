@@ -56,7 +56,9 @@ def extract_context(context: object) -> list[PassageCandidate]:
 
         normalized_title = normalize_title(title)
         normalized_sentences = tuple(normalize_text(sentence) for sentence in block)
-        text = " ".join(normalized_sentences)
+        text = " ".join(
+            sentence for sentence in normalized_sentences if sentence
+        )
         if not normalized_title or not text:
             raise ValueError("title and text must not be empty after normalization")
         content_hash = sha256(text.encode("utf-8")).hexdigest()

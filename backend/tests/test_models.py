@@ -53,6 +53,20 @@ class PassageModelTests(unittest.TestCase):
             {"embedding": "vector_cosine_ops"},
         )
 
+    def test_source_passage_has_paradedb_bm25_index(self):
+        index = next(
+            index
+            for index in SourcePassage.__table__.indexes  # pyright: ignore[reportAttributeAccessIssue]
+            if index.name == "source_passage_paradedb_idx"
+        )
+
+        self.assertEqual(list(index.columns.keys()), ["id", "title", "text"])
+        self.assertEqual(index.dialect_options["postgresql"]["using"], "paradedb")
+        self.assertEqual(
+            index.dialect_options["postgresql"]["with"],
+            {"key_field": "'id'"},
+        )
+
     def test_context_identity_preserves_question_and_position(self):
         primary_keys = {
             column.name

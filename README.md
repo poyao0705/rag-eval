@@ -52,22 +52,17 @@ materialization, and embedding steps below to recreate the application data.
 For data that must be preserved, use a PostgreSQL logical dump and restore
 instead of reusing the PostgreSQL 17 volume.
 
-#### Create and query a BM25 index
+#### Query the BM25 index
 
-After the Alembic migrations have created `source_passage`, create a ParadeDB
-index. A table can have only one ParadeDB index, and its `key_field` must be the
-first indexed column and uniquely identify each row.
+The Alembic migrations create `source_passage_paradedb_idx` after creating
+`source_passage`. The index uses `id` as ParadeDB's unique key and indexes
+`title` and `text` for BM25 retrieval.
 
 ```bash
 docker compose exec postgres psql -U postgres -d deep_agents_rag
 ```
 
 ```sql
-CREATE INDEX source_passage_paradedb_idx
-ON source_passage
-USING paradedb (id, title, text)
-WITH (key_field = 'id');
-
 SELECT id, title, pdb.score(id) AS score
 FROM source_passage
 WHERE text ||| 'distributed systems'

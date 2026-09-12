@@ -1,5 +1,5 @@
 {
-  "include": ["backend/src"],
-  "venvPath": "backend",
-  "venv": ".venv"
+	"include": ["backend/src"],
+	"venvPath": "backend",
+	"venv": ".venv"
 }

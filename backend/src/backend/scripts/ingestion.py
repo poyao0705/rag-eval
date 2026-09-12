@@ -22,8 +22,11 @@ def load_data_from_huggingface(
 async def ingest_data(dataset: IterableDatasetDict) -> None:
 
     for split, data_rows in dataset.items():
+        count = 0
         for batch in batched(data_rows, BATCH_SIZE):
-            print(f"Processing {split} batch...")
+            print(
+                f"Processing {split} batch {count}, this batch contains {len(batch)} rows"
+            )
             records = [
                 HotpotQA.model_validate(
                     {**row, "split": HotpotQASplit(split)}
@@ -35,6 +38,8 @@ async def ingest_data(dataset: IterableDatasetDict) -> None:
 
             async with SessionFactory.begin() as session:
                 await session.execute(statement)
+
+            count += 1
 
 
 def main() -> None:

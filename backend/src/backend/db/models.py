@@ -19,8 +19,6 @@ class HotpotQA(SQLModel, table=True):
     answer: str
     type: str
     level: str
-    supporting_facts: dict[str, Any] = Field(
-        sa_column=Column(JSONB, nullable=False)
-    )
+    supporting_facts: dict[str, Any] = Field(sa_column=Column(JSONB, nullable=False))
     context: dict[str, Any] = Field(sa_column=Column(JSONB, nullable=False))
     split: HotpotQASplit = Field(nullable=False)

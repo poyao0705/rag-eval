@@ -25,6 +25,7 @@ dependencies = [
 [project.scripts]
 backend = "backend:main"
 ingest = "backend.scripts.ingestion:main"
+build-passages = "backend.scripts.passages:main"
 
 [tool.fastapi]
 entrypoint = "backend.main:app"

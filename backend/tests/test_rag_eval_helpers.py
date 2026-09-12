@@ -1,10 +1,13 @@
 import json
+import os
+import subprocess
+import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, call, patch
 from uuid import UUID
 
 from rag_eval.cohort import QAExample, load_cohort
@@ -181,6 +184,140 @@ class ReportTests(unittest.TestCase):
         self.assertNotIn("CREDENTIAL_SENTINEL", json.dumps(saved))
         self.assertEqual(saved["summary"]["attempted_case_count"], 1)
         self.assertEqual(saved["summary"]["completed_case_count"], 1)
+
+
+class HarnessTests(unittest.IsolatedAsyncioTestCase):
+    async def test_run_cases_uses_fixed_order_and_question_only_inputs(self):
+        from test_rag import run_cases
+
+        cohort = [QAExample(f"qa-{i}", f"Question {i}?", f"Answer {i}") for i in range(20)]
+        graphs = {
+            name: SimpleNamespace(
+                ainvoke=AsyncMock(
+                    return_value={
+                        "answer": "A",
+                        "retrieval_context": [],
+                        "retrieved_passages": [],
+                    }
+                )
+            )
+            for name in ("bm25", "tsvector", "vector")
+        }
+        scores = [
+            {"name": name, "score": 0.1, "reason": "low", "error": None}
+            for name in (
+                "answer_relevancy",
+                "faithfulness",
+                "contextual_precision",
+                "contextual_recall",
+                "contextual_relevancy",
+            )
+        ]
+        with TemporaryDirectory() as directory:
+            with (
+                patch("test_rag.build_test_case", return_value=object()),
+                patch("test_rag.build_metrics", return_value=[]),
+                patch("test_rag.score_case", new=AsyncMock(return_value=scores)),
+            ):
+                report = await run_cases(
+                    cohort,
+                    graphs,
+                    object(),
+                    Path(directory) / "results.json",
+                )
+
+        expected_calls = [call({"question": qa.question}) for qa in cohort]
+        for graph in graphs.values():
+            self.assertEqual(graph.ainvoke.await_args_list, expected_calls)
+        self.assertEqual(len(report["cases"]), 60)
+        self.assertEqual(report["qa_ids"], [qa.id for qa in cohort])
+        self.assertEqual(
+            [case["qa_id"] for case in report["cases"][:20]],
+            [qa.id for qa in cohort],
+        )
+        self.assertTrue(all(len(case["metrics"]) == 5 for case in report["cases"]))
+        self.assertTrue(all("Answer" not in str(graph.ainvoke.call_args) for graph in graphs.values()))
+
+    async def test_run_cases_persists_partial_graph_failure(self):
+        from test_rag import run_cases
+
+        cohort = [QAExample("qa-1", "Question?", "Answer")]
+        failed = SimpleNamespace(ainvoke=AsyncMock(side_effect=RuntimeError("secret")))
+        untouched = SimpleNamespace(ainvoke=AsyncMock())
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "results.json"
+            with self.assertRaisesRegex(RuntimeError, "bm25/qa-1"):
+                await run_cases(
+                    cohort,
+                    {"bm25": failed, "tsvector": untouched, "vector": untouched},
+                    object(),
+                    path,
+                )
+            saved = json.loads(path.read_text(encoding="utf-8"))
+
+        self.assertEqual(len(saved["cases"]), 1)
+        self.assertEqual(saved["cases"][0]["error"], {"type": "RuntimeError"})
+        self.assertEqual(untouched.ainvoke.await_count, 0)
+        self.assertNotIn("secret", json.dumps(saved))
+
+    async def test_run_cases_surfaces_metric_error_after_persistence(self):
+        from test_rag import run_cases
+
+        cohort = [QAExample("qa-1", "Question?", "Answer")]
+        graph = SimpleNamespace(
+            ainvoke=AsyncMock(
+                return_value={"answer": "A", "retrieval_context": [], "retrieved_passages": []}
+            )
+        )
+        metric_error = [{"name": "faithfulness", "score": None, "reason": None, "error": {"type": "TimeoutError"}}]
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "results.json"
+            with (
+                patch("test_rag.build_test_case", return_value=object()),
+                patch("test_rag.build_metrics", return_value=[]),
+                patch("test_rag.score_case", new=AsyncMock(return_value=metric_error)),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "scoring failed"):
+                    await run_cases(
+                        cohort,
+                        {"bm25": graph, "tsvector": graph, "vector": graph},
+                        object(),
+                        path,
+                    )
+            saved = json.loads(path.read_text(encoding="utf-8"))
+
+        self.assertEqual(saved["cases"][0]["metrics"], metric_error)
+        self.assertEqual(saved["summary"]["bm25"]["faithfulness"]["error_count"], 1)
+        self.assertEqual(graph.ainvoke.await_count, 1)
+
+    def test_live_collection_is_opt_in_and_does_not_import_database(self):
+        env = os.environ.copy()
+        for key in ("RUN_RAG_EVAL", "OPENAI_API_KEY", "DATABASE_URL"):
+            env.pop(key, None)
+        result = subprocess.run(
+            [sys.executable, "-m", "pytest", "tests/test_rag.py", "-q"],
+            cwd=Path(__file__).parent.parent,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("1 skipped", result.stdout)
+
+        imported = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import sys; import test_rag; assert 'backend.db.database' not in sys.modules",
+            ],
+            cwd=Path(__file__).parent,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(imported.returncode, 0, imported.stdout + imported.stderr)
 
 
 class ScoringTests(unittest.IsolatedAsyncioTestCase):

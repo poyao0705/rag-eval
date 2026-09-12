@@ -1,7 +1,7 @@
 import argparse
 import asyncio
-from dataclasses import dataclass
 import sys
+from dataclasses import dataclass
 from typing import Any
 
 from openai import AsyncOpenAI

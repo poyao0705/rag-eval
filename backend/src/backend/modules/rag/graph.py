@@ -70,13 +70,14 @@ def build_rag_graph(
         raise ValueError("top_k must be greater than zero")
 
     @tool
-    async def retrieve(query: str, runtime: ToolRuntime) -> Command:
-        """Search the document corpus for evidence using one focused search query."""
-        if not query.strip():
-            raise ValueError("retrieval tool query must not be blank")
+    async def retrieve(runtime: ToolRuntime) -> Command:
+        """Search the document corpus using the user's original question."""
         passages = list(
             await retriever.retrieve(
-                RetrievalRequest(query=query, top_k=config.top_k), session
+                RetrievalRequest(
+                    query=runtime.state["question"], top_k=config.top_k
+                ),
+                session,
             )
         )
         context = [f"{passage.title}\n{passage.text}" for passage in passages]

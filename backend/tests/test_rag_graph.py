@@ -30,8 +30,8 @@ class ScriptedModel(FakeMessagesListChatModel):
         return super()._generate(messages, stop, run_manager, **kwargs)
 
 
-def tool_request(query="rewritten search", **overrides):
-    call = {"name": "retrieve", "args": {"query": query}, "id": "call-1"}
+def tool_request(**overrides):
+    call = {"name": "retrieve", "args": {}, "id": "call-1"}
     call.update(overrides)
     return AIMessage(content="", tool_calls=[call])
 
@@ -49,6 +49,25 @@ def build_graph(model, passages=(), *, error=None, config=None):
 
 
 class RAGGraphTests(unittest.IsolatedAsyncioTestCase):
+    async def test_retrieval_uses_original_question_not_model_arguments(self):
+        question = "  Who wrote Café?\nKeep punctuation!  "
+        for args in [
+            {},
+            {"query": "rewritten search"},
+            {"query": " ", "runtime": {"state": {"question": "forged"}}},
+        ]:
+            with self.subTest(args=args):
+                model = ScriptedModel(responses=[
+                    tool_request(args=args), AIMessage(content="Answer")
+                ])
+                graph, retriever, _ = build_graph(model)
+                await graph.ainvoke({"question": question})
+                retriever.retrieve.assert_awaited_once()
+                self.assertEqual(retriever.retrieve.await_args.args[0].query, question)
+                schema = model.requests[0]["tools"][0]["function"]["parameters"]
+                self.assertEqual(schema.get("properties", {}), {})
+                self.assertEqual(schema.get("required", []), [])
+
     async def test_zero_retrieval_calls_are_allowed(self):
         model = ScriptedModel(responses=[AIMessage(content="Insufficient evidence.")])
         graph, retriever, _ = build_graph(model)
@@ -63,7 +82,7 @@ class RAGGraphTests(unittest.IsolatedAsyncioTestCase):
     async def test_second_retrieval_is_blocked_and_agent_continues(self):
         model = ScriptedModel(responses=[
             tool_request(),
-            tool_request("second search", id="call-2"),
+            tool_request(id="call-2"),
             AIMessage(content="Insufficient evidence after one search."),
         ])
         graph, retriever, _ = build_graph(model)
@@ -136,7 +155,7 @@ class RAGGraphTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state["retrieval_count"], 1)
         retriever.retrieve.assert_awaited_once()
         request, used_session = retriever.retrieve.await_args.args
-        self.assertEqual((request.query, request.top_k), ("rewritten search", 10))
+        self.assertEqual((request.query, request.top_k), ("Which answer?", 10))
         self.assertIs(used_session, session)
         self.assertEqual(len(model.requests), 2)
         self.assertEqual(
@@ -155,22 +174,6 @@ class RAGGraphTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state["retrieval_count"], 1)
         self.assertEqual(json.loads(model.requests[1]["messages"][-1].content), [])
         retriever.retrieve.assert_awaited_once()
-
-    async def test_invalid_query_does_not_reach_retriever(self):
-        for args in [{}, {"query": 123}, {"query": " "}]:
-            with self.subTest(args=args):
-                model = ScriptedModel(responses=[
-                    tool_request(args=args), AIMessage(content="Insufficient evidence.")
-                ])
-                graph, retriever, _ = build_graph(model)
-                if args == {"query": " "}:
-                    with self.assertRaisesRegex(ValueError, "must not be blank"):
-                        await graph.ainvoke({"question": "Q?"})
-                else:
-                    state = await graph.ainvoke({"question": "Q?"})
-                    self.assertEqual(state["retrieval_context"], [])
-                    self.assertEqual(state["answer"], "Insufficient evidence.")
-                retriever.retrieve.assert_not_awaited()
 
     async def test_retrieval_failure_does_not_generate_or_retry(self):
         model = ScriptedModel(responses=[tool_request(), AIMessage(content="not used")])
@@ -212,6 +215,10 @@ class RAGGraphTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(second["retrieval_context"], [])
         self.assertEqual(second["retrieval_count"], 1)
         self.assertEqual(retriever.retrieve.await_count, 2)
+        self.assertEqual(
+            [call.args[0].query for call in retriever.retrieve.await_args_list],
+            ["First?", "Second?"],
+        )
         self.assertEqual(len(model.requests), 4)
         self.assertEqual(model.requests[2]["messages"][-1].content, "Second?")
         self.assertFalse(
@@ -259,7 +266,7 @@ class OpenAIModelTests(unittest.IsolatedAsyncioTestCase):
                         "id": "fc-1",
                         "call_id": "call-1",
                         "name": "retrieve",
-                        "arguments": '{"query":"provider search"}',
+                        "arguments": "{}",
                         "status": "completed",
                     },
                 ]
@@ -309,12 +316,13 @@ class OpenAIModelTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state["answer"], "Grounded answer")
         self.assertEqual(state["retrieval_context"], ["Title\nText"])
         retriever.retrieve.assert_awaited_once()
-        self.assertEqual(retriever.retrieve.await_args.args[0].query, "provider search")
+        self.assertEqual(retriever.retrieve.await_args.args[0].query, "Q?")
         self.assertEqual(len(requests), 2)
         first, final = requests
         self.assertEqual(first["tools"][0]["name"], "retrieve")
         self.assertIn(first.get("tool_choice"), (None, "auto"))
-        self.assertEqual(set(first["tools"][0]["parameters"]["properties"]), {"query"})
+        self.assertEqual(first["tools"][0]["parameters"].get("properties", {}), {})
+        self.assertEqual(first["tools"][0]["parameters"].get("required", []), [])
         self.assertIn(final.get("tool_choice"), (None, "auto"))
         self.assertTrue(final.get("tools"))
         tool_result = next(

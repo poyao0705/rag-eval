@@ -4,8 +4,9 @@
 
 `build_rag_graph` uses `langchain.agents.create_agent` with one retrieval tool.
 Invoke it with `{"question": "..."}`. The model may answer directly or request
-one retrieval with a model-selected query. Answers should use only retrieved
-documents; without sufficient evidence, the model should say so. The retriever
+one retrieval using the invocation's original question unchanged. Answers should
+use only retrieved documents; without sufficient evidence, the model should say so.
+The retriever
 remains fixed per graph and returns up to configured `RAG_TOP_K` passages.
 
 The tool returns `Command(update=...)`, storing `retrieved_passages`,
@@ -17,8 +18,10 @@ exit_behavior="continue")` enforces the per-invocation limit. Zero calls are
 allowed; empty results still consume the retrieval allowance. A repeated request
 receives an error `ToolMessage`, is not executed, and the agent continues. In a
 batch, the first retrieval executes and excess retrieval calls are blocked.
-Retrieval failures propagate without retry. Tool input validation uses
-LangChain's native schema handling plus a nonblank query check.
+Retrieval failures propagate without retry.
+The retrieve tool exposes no model-controlled arguments. It reads the original
+question from injected runtime state; nonblank question validation occurs before
+model execution.
 This is not crash-safe deduplication across caller retries. The configured
 provider must support tool calling and the OpenAI Responses API.
 

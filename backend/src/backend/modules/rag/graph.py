@@ -1,14 +1,11 @@
 import json
-from collections.abc import Awaitable, Callable
-from typing import Any, NotRequired
+from typing import Any, NotRequired, cast
 
 from langchain.agents import AgentState, create_agent
 from langchain.agents.middleware import (
-    ModelRequest,
-    ModelResponse,
+    ToolCallLimitMiddleware,
     after_agent,
     before_agent,
-    wrap_model_call,
 )
 from langchain.tools import ToolRuntime, tool
 from langchain_core.language_models import BaseChatModel
@@ -53,46 +50,14 @@ def initialize(state: RAGState, runtime: Runtime) -> dict[str, Any]:
     }
 
 
-@wrap_model_call(state_schema=RAGState)
-async def single_retrieval(
-    request: ModelRequest,
-    handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
-) -> ModelResponse:
-    retrieved = request.state.get("retrieval_count", 0) == 1
-    if retrieved:
-        request = request.override(
-            tools=[], tool_choice="none", model_settings={"tool_choice": "none"}
-        )
-    else:
-        request = request.override(
-            tool_choice="retrieve", model_settings={"parallel_tool_calls": False}
-        )
-    response = await handler(request)
-    message = response.result[-1]
-    if not isinstance(message, AIMessage) or message.invalid_tool_calls:
-        raise ValueError("model returned an invalid tool response")
-    if retrieved:
-        if message.tool_calls:
-            raise ValueError("retrieval tool may only be called once")
-        if not message.text.strip():
-            raise ValueError("generator returned an empty or non-text answer")
-    else:
-        if len(message.tool_calls) != 1:
-            raise ValueError("model must request exactly one retrieval tool call")
-        call = message.tool_calls[0]
-        if call["name"] != "retrieve" or not (call.get("id") or "").strip():
-            raise ValueError("invalid retrieval tool name or call ID")
-        args = call["args"]
-        if set(args) != {"query"} or not isinstance(args["query"], str):
-            raise ValueError("retrieval tool requires only a string query")
-        if not args["query"].strip():
-            raise ValueError("retrieval tool query must not be blank")
-    return response
-
-
 @after_agent(state_schema=RAGState)
 def expose_answer(state: RAGState, runtime: Runtime) -> dict[str, str]:
-    return {"answer": state["messages"][-1].text}
+    message = state["messages"][-1]
+    if not isinstance(message, AIMessage) or message.invalid_tool_calls or message.tool_calls:
+        raise ValueError("model returned an invalid final response")
+    if not message.text.strip():
+        raise ValueError("generator returned an empty or non-text answer")
+    return {"answer": message.text}
 
 
 def build_rag_graph(
@@ -107,8 +72,8 @@ def build_rag_graph(
     @tool
     async def retrieve(query: str, runtime: ToolRuntime) -> Command:
         """Search the document corpus for evidence using one focused search query."""
-        if runtime.state.get("retrieval_count", 0) != 0:
-            raise ValueError("retrieval tool may only be called once")
+        if not query.strip():
+            raise ValueError("retrieval tool query must not be blank")
         passages = list(
             await retriever.retrieve(
                 RetrievalRequest(query=query, top_k=config.top_k), session
@@ -133,5 +98,15 @@ def build_rag_graph(
         tools=[retrieve],
         system_prompt=INSTRUCTIONS,
         state_schema=RAGState,
-        middleware=[initialize, single_retrieval, expose_answer],
+        middleware=[
+            initialize,
+            # create_agent merges middleware state schemas at runtime.
+            cast(
+                Any,
+                ToolCallLimitMiddleware(
+                    tool_name="retrieve", run_limit=1, exit_behavior="continue"
+                ),
+            ),
+            expose_answer,
+        ],
     )

@@ -49,6 +49,54 @@ def build_graph(model, passages=(), *, error=None, config=None):
 
 
 class RAGGraphTests(unittest.IsolatedAsyncioTestCase):
+    async def test_zero_retrieval_calls_are_allowed(self):
+        model = ScriptedModel(responses=[AIMessage(content="Insufficient evidence.")])
+        graph, retriever, _ = build_graph(model)
+        state = await graph.ainvoke({"question": "Q?"})
+        self.assertEqual(state["answer"], "Insufficient evidence.")
+        self.assertEqual(state["retrieval_context"], [])
+        self.assertEqual(state["retrieved_passages"], [])
+        self.assertEqual(state["retrieval_count"], 0)
+        retriever.retrieve.assert_not_awaited()
+        self.assertEqual(len(model.requests), 1)
+
+    async def test_second_retrieval_is_blocked_and_agent_continues(self):
+        model = ScriptedModel(responses=[
+            tool_request(),
+            tool_request("second search", id="call-2"),
+            AIMessage(content="Insufficient evidence after one search."),
+        ])
+        graph, retriever, _ = build_graph(model)
+        state = await graph.ainvoke({"question": "Q?"})
+        self.assertEqual(state["answer"], "Insufficient evidence after one search.")
+        self.assertEqual(state["retrieval_count"], 1)
+        retriever.retrieve.assert_awaited_once()
+        blocked = next(
+            message for message in state["messages"]
+            if isinstance(message, ToolMessage) and message.tool_call_id == "call-2"
+        )
+        self.assertEqual(blocked.status, "error")
+        self.assertIn("Tool call limit exceeded", blocked.content)
+        self.assertEqual(len(model.requests), 3)
+
+    async def test_multiple_retrieval_requests_block_excess_calls_and_continue(self):
+        calls = tool_request().tool_calls + tool_request(id="call-2").tool_calls
+        model = ScriptedModel(responses=[
+            AIMessage(content="", tool_calls=calls),
+            AIMessage(content="Insufficient evidence after one search."),
+        ])
+        graph, retriever, _ = build_graph(model)
+        state = await graph.ainvoke({"question": "Q?"})
+        self.assertEqual(state["answer"], "Insufficient evidence after one search.")
+        self.assertEqual(state["retrieval_count"], 1)
+        retriever.retrieve.assert_awaited_once()
+        blocked = next(
+            message for message in state["messages"]
+            if isinstance(message, ToolMessage) and message.tool_call_id == "call-2"
+        )
+        self.assertEqual(blocked.status, "error")
+        self.assertEqual(len(model.requests), 2)
+
     async def test_tool_result_enters_state_before_final_model_and_preserves_context(
         self,
     ):
@@ -73,7 +121,10 @@ class RAGGraphTests(unittest.IsolatedAsyncioTestCase):
             snapshots.append(state)
         state = snapshots[-1]
         context = ["Second title\nFirst ranked text", "First title\nSecond ranked text"]
-        before_final = next(s for s in snapshots if s.get("retrieval_count") == 1)
+        before_final = next(
+            s for s in snapshots
+            if s["messages"] and isinstance(s["messages"][-1], ToolMessage)
+        )
         self.assertIsInstance(before_final["messages"][-1], ToolMessage)
         self.assertEqual(before_final["retrieved_passages"], passages)
         self.assertEqual(before_final["retrieval_context"], context)
@@ -88,10 +139,6 @@ class RAGGraphTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((request.query, request.top_k), ("rewritten search", 10))
         self.assertIs(used_session, session)
         self.assertEqual(len(model.requests), 2)
-        self.assertEqual(model.requests[0]["tool_choice"], "retrieve")
-        self.assertFalse(model.requests[0]["parallel_tool_calls"])
-        self.assertEqual(model.requests[1].get("tools", []), [])
-        self.assertEqual(model.requests[1]["tool_choice"], "none")
         self.assertEqual(
             model.requests[1]["messages"][-1], before_final["messages"][-1]
         )
@@ -109,50 +156,21 @@ class RAGGraphTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(json.loads(model.requests[1]["messages"][-1].content), [])
         retriever.retrieve.assert_awaited_once()
 
-    async def test_invalid_initial_calls_do_not_retrieve(self):
-        invalid = [
-            AIMessage(content="Skipping retrieval"),
-            tool_request(name="unknown"),
-            tool_request(id=""),
-            tool_request(id=" "),
-            tool_request(id=None),
-            tool_request(query=" "),
-            tool_request(args={}),
-            tool_request(args={"query": 123}),
-            tool_request(args={"query": "Q", "top_k": 100}),
-            AIMessage(content="", tool_calls=tool_request().tool_calls * 2),
-            AIMessage(
-                content="",
-                invalid_tool_calls=[
-                    {
-                        "name": "retrieve",
-                        "args": "{",
-                        "id": "bad",
-                        "error": "invalid JSON",
-                    }
-                ],
-            ),
-        ]
-        for response in invalid:
-            with self.subTest(response=response):
-                model = ScriptedModel(responses=[response])
+    async def test_invalid_query_does_not_reach_retriever(self):
+        for args in [{}, {"query": 123}, {"query": " "}]:
+            with self.subTest(args=args):
+                model = ScriptedModel(responses=[
+                    tool_request(args=args), AIMessage(content="Insufficient evidence.")
+                ])
                 graph, retriever, _ = build_graph(model)
-                with self.assertRaises(ValueError):
-                    await graph.ainvoke({"question": "Q?"})
+                if args == {"query": " "}:
+                    with self.assertRaisesRegex(ValueError, "must not be blank"):
+                        await graph.ainvoke({"question": "Q?"})
+                else:
+                    state = await graph.ainvoke({"question": "Q?"})
+                    self.assertEqual(state["retrieval_context"], [])
+                    self.assertEqual(state["answer"], "Insufficient evidence.")
                 retriever.retrieve.assert_not_awaited()
-                self.assertEqual(len(model.requests), 1)
-
-    async def test_second_tool_call_is_rejected_even_if_model_ignores_disabled_tools(
-        self,
-    ):
-        model = ScriptedModel(
-            responses=[tool_request(), tool_request("second search", id="call-2")]
-        )
-        graph, retriever, _ = build_graph(model)
-        with self.assertRaisesRegex(ValueError, "retrieval|tool"):
-            await graph.ainvoke({"question": "Q?"})
-        retriever.retrieve.assert_awaited_once()
-        self.assertEqual(len(model.requests), 2)
 
     async def test_retrieval_failure_does_not_generate_or_retry(self):
         model = ScriptedModel(responses=[tool_request(), AIMessage(content="not used")])
@@ -172,14 +190,16 @@ class RAGGraphTests(unittest.IsolatedAsyncioTestCase):
             "   ",
             [{"type": "image_url", "image_url": {"url": "unused"}}],
         ]:
-            with self.subTest(content=content):
-                model = ScriptedModel(
-                    responses=[tool_request(), AIMessage(content=content)]
-                )
-                graph, retriever, _ = build_graph(model)
-                with self.assertRaisesRegex(ValueError, "empty or non-text"):
-                    await graph.ainvoke({"question": "Q?"})
-                retriever.retrieve.assert_awaited_once()
+            for retrieve_first in [False, True]:
+                with self.subTest(content=content, retrieve_first=retrieve_first):
+                    model = ScriptedModel(
+                        responses=[tool_request(), AIMessage(content=content)]
+                        if retrieve_first else [AIMessage(content=content)]
+                    )
+                    graph, retriever, _ = build_graph(model)
+                    with self.assertRaisesRegex(ValueError, "empty or non-text"):
+                        await graph.ainvoke({"question": "Q?"})
+                    self.assertEqual(retriever.retrieve.await_count, int(retrieve_first))
 
     async def test_invocations_reset_budget_and_ignore_supplied_stale_state(self):
         model = ScriptedModel(responses=[tool_request(), AIMessage(content="Answer")])
@@ -198,6 +218,14 @@ class RAGGraphTests(unittest.IsolatedAsyncioTestCase):
             any(isinstance(m, ToolMessage) for m in model.requests[2]["messages"])
         )
 
+        model.responses = [AIMessage(content="Insufficient evidence.")]
+        model.i = 0
+        third = await graph.ainvoke({**first, "question": "Third?"})
+        self.assertEqual(third["retrieval_context"], [])
+        self.assertEqual(third["retrieved_passages"], [])
+        self.assertEqual(third["retrieval_count"], 0)
+        self.assertEqual(retriever.retrieve.await_count, 2)
+
     async def test_invalid_question_does_not_call_model(self):
         for question in ["", " ", None, 42]:
             with self.subTest(question=question):
@@ -210,7 +238,7 @@ class RAGGraphTests(unittest.IsolatedAsyncioTestCase):
 
 
 class OpenAIModelTests(unittest.IsolatedAsyncioTestCase):
-    async def test_real_model_sends_required_tool_and_consumes_state_result(self):
+    async def test_real_model_consumes_tool_result_without_forced_choice(self):
         import httpx2 as httpx
         from openai import AsyncOpenAI
 
@@ -284,11 +312,11 @@ class OpenAIModelTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(retriever.retrieve.await_args.args[0].query, "provider search")
         self.assertEqual(len(requests), 2)
         first, final = requests
-        self.assertEqual(first["tool_choice"], {"type": "function", "name": "retrieve"})
-        self.assertFalse(first["parallel_tool_calls"])
+        self.assertEqual(first["tools"][0]["name"], "retrieve")
+        self.assertIn(first.get("tool_choice"), (None, "auto"))
         self.assertEqual(set(first["tools"][0]["parameters"]["properties"]), {"query"})
-        self.assertEqual(final["tool_choice"], "none")
-        self.assertFalse(final.get("tools"))
+        self.assertIn(final.get("tool_choice"), (None, "auto"))
+        self.assertTrue(final.get("tools"))
         tool_result = next(
             item for item in final["input"] if item["type"] == "function_call_output"
         )

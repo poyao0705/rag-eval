@@ -3,23 +3,24 @@
 ## RAG agent
 
 `build_rag_graph` uses `langchain.agents.create_agent` with one retrieval tool.
-Invoke it with `{"question": "..."}`. Each successful invocation makes two
-configured answer-model requests: a required retrieval tool call with a
-model-selected search query, then an answer with tools disabled. The retriever
+Invoke it with `{"question": "..."}`. The model may answer directly or request
+one retrieval with a model-selected query. Answers should use only retrieved
+documents; without sufficient evidence, the model should say so. The retriever
 remains fixed per graph and returns up to configured `RAG_TOP_K` passages.
 
 The tool returns `Command(update=...)`, storing `retrieved_passages`,
-`retrieval_context`, `retrieval_count`, and a matching `ToolMessage` in agent
-state. The next model request reads that message; the final state retains
-these fields and adds `answer` for evaluation. Empty results still count as
-the one retrieval. Each invocation starts with fresh state.
+`retrieval_context`, and a matching `ToolMessage`. The final state also exposes
+`answer` for evaluation. Each invocation clears prior messages and evidence.
 
-Middleware rejects missing, malformed, multiple, or repeated tool calls;
-provider tool-choice settings and prompts are not the only enforcement.
-Retrieval errors propagate without retry or final generation. Exactly-once
-means one retrieval in a successful invocation, not crash-safe deduplication
-across caller retries. Providers must support required tool choice, disabling
-parallel calls, and the OpenAI Responses API.
+`ToolCallLimitMiddleware(tool_name="retrieve", run_limit=1,
+exit_behavior="continue")` enforces the per-invocation limit. Zero calls are
+allowed; empty results still consume the retrieval allowance. A repeated request
+receives an error `ToolMessage`, is not executed, and the agent continues. In a
+batch, the first retrieval executes and excess retrieval calls are blocked.
+Retrieval failures propagate without retry. Tool input validation uses
+LangChain's native schema handling plus a nonblank query check.
+This is not crash-safe deduplication across caller retries. The configured
+provider must support tool calling and the OpenAI Responses API.
 
 ## RAG configuration
 

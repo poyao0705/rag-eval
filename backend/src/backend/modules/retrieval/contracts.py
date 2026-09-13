@@ -26,6 +26,7 @@ class RetrievedPassage:
     rank: int
     score: float | None
     retriever: str
+    relevance_score: float | None = None
 
 
 class QueryEmbedder(Protocol):

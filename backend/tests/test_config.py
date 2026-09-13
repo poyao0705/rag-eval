@@ -16,6 +16,7 @@ class SettingsTests(unittest.TestCase):
             _env_file=None,  # pyright: ignore[reportCallIssue]
             DATABASE_URL=DATABASE_URL,
             OPENAI_API_KEY="sk-test",
+            COHERE_API_KEY="cohere-test",
         )
         api_key = cast(SecretStr, getattr(settings, "OPENAI_API_KEY"))
 
@@ -28,6 +29,7 @@ class SettingsTests(unittest.TestCase):
                 Settings(  # pyright: ignore[reportCallIssue]
                     _env_file=None,  # pyright: ignore[reportCallIssue]
                     DATABASE_URL=DATABASE_URL,
+                    COHERE_API_KEY="cohere-test",
                 )
 
     def test_openai_api_key_blank_fails_validation(self):
@@ -37,6 +39,7 @@ class SettingsTests(unittest.TestCase):
                     _env_file=None,  # pyright: ignore[reportCallIssue]
                     DATABASE_URL=DATABASE_URL,
                     OPENAI_API_KEY="   ",
+                    COHERE_API_KEY="cohere-test",
                 )
 
         self.assertIn("OPENAI_API_KEY", str(context.exception))
@@ -46,6 +49,7 @@ class SettingsTests(unittest.TestCase):
             _env_file=None,  # pyright: ignore[reportCallIssue]
             DATABASE_URL=DATABASE_URL,
             OPENAI_API_KEY="sk-test",
+            COHERE_API_KEY="cohere-test",
             RAG_ANSWER_MODEL="answer-model",
             RAG_TOP_K=10,
             RAG_EVAL_JUDGE_MODEL="judge-model",
@@ -73,6 +77,7 @@ class SettingsTests(unittest.TestCase):
             {
                 "DATABASE_URL": DATABASE_URL,
                 "OPENAI_API_KEY": "sk-test",
+                "COHERE_API_KEY": "cohere-test",
                 "RAG_HYBRID_CANDIDATE_TOP_K": "25",
             },
             clear=True,
@@ -80,6 +85,34 @@ class SettingsTests(unittest.TestCase):
             settings = Settings(_env_file=None)  # pyright: ignore[reportCallIssue]
 
         self.assertEqual(settings.rag_config.hybrid_candidate_top_k, 25)
+
+    def test_rerank_model_default_and_environment_override(self):
+        self.assertEqual(RAGConfig().rerank_model, "rerank-english-v3.0")
+        env = {
+            "DATABASE_URL": DATABASE_URL,
+            "OPENAI_API_KEY": "sk-test",
+            "COHERE_API_KEY": "cohere-test",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            self.assertEqual(
+                Settings(  # pyright: ignore[reportCallIssue]
+                    _env_file=None,  # pyright: ignore[reportCallIssue]
+                ).rag_config.rerank_model,
+                "rerank-english-v3.0",
+            )
+        with patch.dict(os.environ, {**env, "RAG_RERANK_MODEL": "custom-model"}, clear=True):
+            self.assertEqual(
+                Settings(  # pyright: ignore[reportCallIssue]
+                    _env_file=None,  # pyright: ignore[reportCallIssue]
+                ).rag_config.rerank_model,
+                "custom-model",
+            )
+        with patch.dict(os.environ, {**env, "RAG_RERANK_MODEL": " "}, clear=True):
+            with self.assertRaises(ValidationError) as caught:
+                Settings(  # pyright: ignore[reportCallIssue]
+                    _env_file=None,  # pyright: ignore[reportCallIssue]
+                )
+        self.assertIn("RAG_RERANK_MODEL", str(caught.exception))
 
     def test_rag_config_rejects_invalid_numeric_values(self):
         for field, value in (
@@ -96,5 +129,6 @@ class SettingsTests(unittest.TestCase):
                         _env_file=None,  # pyright: ignore[reportCallIssue]
                         DATABASE_URL=DATABASE_URL,
                         OPENAI_API_KEY="sk-test",
+                        COHERE_API_KEY="cohere-test",
                         **{field: value},
                     )

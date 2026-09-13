@@ -16,6 +16,7 @@ class RAGConfig:
     evaluation_seed: int = 42
     evaluation_sample_size: int = 20
     evaluation_metric_threshold: float = 0.5
+    rerank_model: str = "rerank-english-v3.0"
 
 
 DEFAULT_RAG_CONFIG = RAGConfig()
@@ -30,6 +31,7 @@ class Settings(BaseSettings):
     RAG_EVAL_JUDGE_MODEL: str = DEFAULT_RAG_CONFIG.judge_model
     RAG_EVAL_SEED: int = DEFAULT_RAG_CONFIG.evaluation_seed
     RAG_EVAL_SAMPLE_SIZE: int = DEFAULT_RAG_CONFIG.evaluation_sample_size
+    RAG_RERANK_MODEL: str = DEFAULT_RAG_CONFIG.rerank_model
     RAG_EVAL_METRIC_THRESHOLD: float = DEFAULT_RAG_CONFIG.evaluation_metric_threshold
 
     @field_validator("OPENAI_API_KEY")
@@ -39,7 +41,7 @@ class Settings(BaseSettings):
             raise ValueError("OPENAI_API_KEY must not be blank")
         return value
 
-    @field_validator("RAG_ANSWER_MODEL", "RAG_EVAL_JUDGE_MODEL")
+    @field_validator("RAG_ANSWER_MODEL", "RAG_EVAL_JUDGE_MODEL", "RAG_RERANK_MODEL")
     @classmethod
     def validate_model_name(cls, value: str) -> str:
         if not value.strip():
@@ -70,6 +72,7 @@ class Settings(BaseSettings):
             hybrid_candidate_top_k=self.RAG_HYBRID_CANDIDATE_TOP_K,
             judge_model=self.RAG_EVAL_JUDGE_MODEL,
             evaluation_seed=self.RAG_EVAL_SEED,
+            rerank_model=self.RAG_RERANK_MODEL,
             evaluation_sample_size=self.RAG_EVAL_SAMPLE_SIZE,
             evaluation_metric_threshold=self.RAG_EVAL_METRIC_THRESHOLD,
         )

@@ -2,10 +2,22 @@
 
 from __future__ import annotations
 
+import importlib
+import json
 import math
+import os
+import struct
+import subprocess
+import sys
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
-from rag_eval.visualize import _matrices
+visualize = importlib.import_module("rag_eval.visualize")
+_matrices = visualize._matrices
+build_figures = visualize.build_figures
+render_report = visualize.render_report
 
 
 def sample_report() -> dict:
@@ -126,3 +138,133 @@ class MatrixTests(unittest.TestCase):
         for report in reports:
             with self.subTest(report=report), self.assertRaises(ValueError):
                 _matrices(report)
+
+
+class RenderingTests(unittest.TestCase):
+    def test_figure_semantics(self) -> None:
+        summary, recall = build_figures(sample_report())
+        self.assertEqual(summary.axes[0].images[0].get_clim(), (0.0, 1.0))
+        self.assertEqual(recall.axes[0].images[0].get_clim(), (0.0, 1.0))
+        self.assertEqual(len(summary.axes[0].get_yticklabels()), 2)
+        self.assertEqual(len(summary.axes[0].get_xticklabels()), 5)
+        self.assertEqual(len(recall.axes[0].get_yticklabels()), 2)
+        self.assertEqual(len(recall.axes[0].get_xticklabels()), 2)
+        labels = [text.get_text() for text in summary.axes[0].texts]
+        self.assertIn("0.75\nn=2", labels)
+        self.assertIn("N/A\nn=0", labels)
+        self.assertIn("N/A", [text.get_text() for text in recall.axes[0].texts])
+
+    def test_png_export_preserves_json(self) -> None:
+        with TemporaryDirectory() as directory:
+            source = Path(directory) / "custom.json"
+            source.write_text(json.dumps(sample_report()), encoding="utf-8")
+            before = source.read_bytes()
+            outputs = render_report(source)
+            self.assertEqual(
+                [path.name for path in outputs],
+                ["custom.summary.png", "custom.contextual_recall.png"],
+            )
+            for output in outputs:
+                self.assertTrue(output.read_bytes().startswith(b"\x89PNG\r\n\x1a\n"))
+                width, height = struct.unpack(">II", output.read_bytes()[16:24])
+                self.assertGreater(height, 100)
+                self.assertGreater(width, 100)
+            self.assertEqual(source.read_bytes(), before)
+            self.assertEqual(render_report(source), outputs)
+
+    def test_cli_needs_no_credentials_or_display(self) -> None:
+        with TemporaryDirectory() as directory:
+            source = Path(directory) / "results.json"
+            source.write_text(json.dumps(sample_report()), encoding="utf-8")
+            result = self._run_cli(source)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertTrue(source.with_suffix(".summary.png").exists())
+            self.assertTrue(source.with_suffix(".contextual_recall.png").exists())
+
+    def test_cli_rejects_missing_or_malformed_input(self) -> None:
+        with TemporaryDirectory() as directory:
+            missing = Path(directory) / "missing.json"
+            malformed = Path(directory) / "malformed.json"
+            malformed.write_text("{", encoding="utf-8")
+            for source in (missing, malformed):
+                with self.subTest(source=source):
+                    result = self._run_cli(source)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertFalse(source.with_suffix(".summary.png").exists())
+                    self.assertFalse(
+                        source.with_suffix(".contextual_recall.png").exists()
+                    )
+
+    def test_all_missing_data_still_renders_gray_cells(self) -> None:
+        report = sample_report()
+        for case in report["cases"]:
+            case["metrics"][0]["score"] = None
+        with TemporaryDirectory() as directory:
+            source = Path(directory) / "results.json"
+            source.write_text(json.dumps(report), encoding="utf-8")
+            outputs = render_report(source)
+            self.assertEqual(len(outputs), 2)
+            self.assertTrue(all(output.exists() for output in outputs))
+
+    def test_titles_mark_partial_and_error_reports(self) -> None:
+        report = sample_report()
+        report["errors"] = [{"stage": "judge", "type": "RuntimeError"}]
+        report["cases"][1]["metrics"][0]["error"] = {"type": "JudgeError"}
+        summary, recall = build_figures(report)
+        self.assertIn("PARTIAL", summary.axes[0].get_title())
+        self.assertIn("ERRORS", summary.axes[0].get_title())
+        self.assertIn("PARTIAL", recall.axes[0].get_title())
+        self.assertIn("ERRORS", recall.axes[0].get_title())
+        self.assertIn("Faithfulness is not correctness", "".join(
+            text.get_text() for text in summary.texts
+        ))
+
+    def test_one_retriever_report_keeps_both_grids_dynamic(self) -> None:
+        report = sample_report()
+        report.update(
+            retrievers=["vector"],
+            qa_ids=["q1"],
+            expected_case_count=1,
+            cases=[report["cases"][1]],
+        )
+        summary, recall = build_figures(report)
+        self.assertEqual(len(summary.axes[0].get_xticklabels()), 5)
+        self.assertEqual(len(recall.axes[0].get_xticklabels()), 1)
+        self.assertEqual(len(recall.axes[0].get_yticklabels()), 1)
+
+    def test_save_failure_removes_temporary_file_and_preserves_json(self) -> None:
+        with TemporaryDirectory() as directory:
+            source = Path(directory) / "results.json"
+            source.write_text(json.dumps(sample_report()), encoding="utf-8")
+            temporary = source.with_suffix(".summary.tmp")
+            temporary.write_bytes(b"stale")
+            before = source.read_bytes()
+            with patch(
+                "rag_eval.visualize.Figure.savefig",
+                side_effect=OSError("disk full"),
+            ):
+                with self.assertRaisesRegex(OSError, "disk full"):
+                    render_report(source)
+            self.assertEqual(source.read_bytes(), before)
+            self.assertFalse(temporary.exists())
+
+    @staticmethod
+    def _run_cli(source: Path) -> subprocess.CompletedProcess[str]:
+        env = os.environ.copy()
+        for key in (
+            "OPENAI_API_KEY",
+            "COHERE_API_KEY",
+            "DATABASE_URL",
+            "RUN_RAG_EVAL",
+            "DISPLAY",
+            "WAYLAND_DISPLAY",
+        ):
+            env.pop(key, None)
+        return subprocess.run(
+            [sys.executable, "-m", "rag_eval.visualize", str(source)],
+            cwd=Path(__file__).parent,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )

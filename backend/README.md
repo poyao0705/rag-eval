@@ -111,10 +111,24 @@ metrics should not be interpreted as a standalone answer-correctness gate.
 Metric measurements are not API-call counts: each metric may make multiple
 judge requests, and generation, embeddings, and hybrid reranking add calls/cost.
 
+Successful paid runs also write two local PNGs beside the JSON report:
+`results.summary.png` compares retrievers across all five metrics, while
+`results.contextual_recall.png` shows contextual recall for each question and
+retriever. Gray `N/A` cells mean no valid measurement; they are not zero.
+Counts show valid measurements behind each aggregate mean. Faithfulness remains
+separate from answer correctness, and the 20-question cohort is exploratory.
+If image writing fails after evaluation, rerun the offline renderer rather than
+rerunning paid evaluation. Images from an older run can remain after a failed
+run, so compare their metadata with the JSON timestamp.
+
 ```bash
 # Offline: no opt-in, no paid calls.
 cd backend
 uv sync --locked
+# Regenerate heatmaps from saved JSON; no model or database calls.
+PYTHONPATH=tests uv run python -m rag_eval.visualize .rag-eval/results.json
+# Offline chart tests use synthetic reports.
+RUN_RAG_EVAL=0 uv run pytest tests/test_rag_eval_visualization.py -q
 uv run pytest tests/test_rag_graph.py tests/test_rag_eval_helpers.py tests/test_rag_eval_scoring.py tests/test_rag.py -q
 
 # Operator-only, after explicit DB migration authorization.

@@ -83,6 +83,7 @@ upgrading ParadeDB.
    ```env
    DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/deep_agents_rag
    OPENAI_API_KEY=sk-your-key
+   COHERE_API_KEY=your-cohere-key
    ```
 
 4. Install dependencies:
@@ -120,6 +121,32 @@ stores one unique normalized passage per identity in `source_passage`, while
 `hotpot_qa_context` limits retrieval to the original question's context
 candidates. `embed-passages` fills missing embeddings in resumable batches using
 `text-embedding-3-small`; rerunning it skips passages that already have vectors.
+
+### RAG evaluation
+
+Run the offline test suite without paid calls:
+
+```bash
+cd backend
+RUN_RAG_EVAL=0 uv run pytest -q
+```
+
+Run the opt-in live RAG evaluation after preparing the database, passages, and
+embeddings:
+
+```bash
+RUN_RAG_EVAL=1 uv run pytest tests/test_rag.py -q
+```
+
+The live evaluation requires `DATABASE_URL`, `OPENAI_API_KEY`, and
+`COHERE_API_KEY`. It evaluates the configured retriever graphs sequentially and
+writes the JSON report to:
+
+```text
+backend/.rag-eval/results.json
+```
+
+The report contains per-case results and aggregate metrics under `summary`.
 
 ### HotpotQA passage sizing
 

@@ -1,8 +1,11 @@
 import unittest
 from dataclasses import replace
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import AsyncMock
 from uuid import UUID
+
+from cohere import AsyncClientV2
 
 from backend.modules.retrieval.contracts import RetrievedPassage
 from backend.modules.retrieval.reranking import CohereReranker
@@ -11,7 +14,7 @@ from backend.modules.retrieval.reranking import CohereReranker
 class RerankingTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.client = SimpleNamespace(rerank=AsyncMock())
-        self.reranker = CohereReranker(self.client)
+        self.reranker = CohereReranker(cast(AsyncClientV2, self.client))
         self.candidates = [
             RetrievedPassage(UUID(int=i), f"Title {i}", f"Text {i}", i,
                              1 / (60 + i), "hybrid_bm25")
@@ -47,7 +50,9 @@ class RerankingTests(unittest.IsolatedAsyncioTestCase):
         self.client.rerank.return_value = SimpleNamespace(results=[
             SimpleNamespace(index=0, relevance_score=0.8),
         ])
-        reranker = CohereReranker(self.client, model="custom-model")
+        reranker = CohereReranker(
+            cast(AsyncClientV2, self.client), model="custom-model"
+        )
         results = await reranker.rerank("q", self.candidates[:1], 10)
         self.client.rerank.assert_awaited_once_with(
             query="q", documents=["Text 1"], top_n=1, model="custom-model",

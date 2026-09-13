@@ -12,7 +12,6 @@ from typing import Any, Mapping, Sequence
 from backend.core.config import DEFAULT_RAG_CONFIG, RAGConfig
 from rag_eval.cohort import QAExample
 
-RETRIEVERS = ("bm25", "tsvector", "vector")
 METRICS = (
     "answer_relevancy",
     "faithfulness",
@@ -23,7 +22,10 @@ METRICS = (
 
 
 def new_report(
-    cohort: Sequence[QAExample], config: RAGConfig = DEFAULT_RAG_CONFIG
+    cohort: Sequence[QAExample],
+    config: RAGConfig = DEFAULT_RAG_CONFIG,
+    *,
+    retriever_names: Sequence[str] = (),
 ) -> dict[str, Any]:
     """Return an empty report carrying configured evaluation metadata."""
     return {
@@ -34,7 +36,8 @@ def new_report(
         "generator_model": config.answer_model,
         "judge_model": config.judge_model,
         "top_k": config.top_k,
-        "expected_case_count": config.evaluation_sample_size * len(RETRIEVERS),
+        "retrievers": list(retriever_names),
+        "expected_case_count": len(cohort) * len(retriever_names),
         "cases": [],
         "errors": [],
     }
@@ -112,13 +115,17 @@ def _valid_score(score: Any) -> bool:
 def summarize(
     cases: list[dict[str, Any]],
     *,
-    expected_case_count: int = DEFAULT_RAG_CONFIG.evaluation_sample_size
-    * len(RETRIEVERS),
+    retriever_names: Sequence[str] | None = None,
+    expected_case_count: int | None = None,
 ) -> dict[str, Any]:
     """Summarize successful scores and make every missing measurement visible."""
+    if retriever_names is None:
+        retriever_names = list(dict.fromkeys(case["retriever"] for case in cases))
+    if expected_case_count is None:
+        expected_case_count = len(cases)
     totals: dict[str, dict[str, dict[str, Any]]] = {
         retriever: {metric: {"scores": [], "error_count": 0} for metric in METRICS}
-        for retriever in RETRIEVERS
+        for retriever in retriever_names
     }
     attempted = len(cases)
     completed = sum(1 for case in cases if case.get("error") is None)
@@ -148,7 +155,7 @@ def summarize(
                 entry["error_count"] += 1
 
     summary: dict[str, Any] = {}
-    for retriever in RETRIEVERS:
+    for retriever in retriever_names:
         summary[retriever] = {}
         for metric in METRICS:
             entry = totals[retriever][metric]
@@ -173,7 +180,9 @@ def write_report(path: Path, report: dict[str, Any]) -> None:
     """Atomically write a report after recomputing its summary."""
     path.parent.mkdir(parents=True, exist_ok=True)
     report["summary"] = summarize(
-        report["cases"], expected_case_count=report["expected_case_count"]
+        report["cases"],
+        retriever_names=report["retrievers"],
+        expected_case_count=report["expected_case_count"],
     )
     temporary = path.with_suffix(".tmp")
     temporary.write_text(

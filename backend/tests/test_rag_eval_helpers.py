@@ -114,7 +114,7 @@ class ReportTests(unittest.TestCase):
             },
         ]
 
-        summary = summarize(cases)
+        summary = summarize(cases, expected_case_count=60)
 
         self.assertEqual(
             summary["bm25"]["answer_relevancy"],
@@ -134,6 +134,18 @@ class ReportTests(unittest.TestCase):
             },
             {2, 2, 0, 60},
         )
+
+    def test_standalone_summary_infers_names_and_attempted_count(self):
+        summary = summarize([
+            {"retriever": name, "metrics": [], "error": None}
+            for name in ("custom_z", "custom_a", "custom_z")
+        ])
+        self.assertEqual(list(summary)[:2], ["custom_z", "custom_a"])
+        self.assertEqual(summary["expected_case_count"], 3)
+        self.assertEqual(summarize([])["expected_case_count"], 0)
+        report = new_report([QAExample("1", "Q", "A")])
+        self.assertEqual(report["retrievers"], [])
+        self.assertEqual(report["expected_case_count"], 0)
 
     def test_write_report_round_trips_safe_partial_case_records(self):
         qa = QAExample("qa-1", "Who?", "GOLD_SENTINEL")
@@ -167,7 +179,7 @@ class ReportTests(unittest.TestCase):
         config = RAGConfig(
             answer_model="answer-model", judge_model="judge-model", top_k=10
         )
-        report = new_report([qa], config)
+        report = new_report([qa], config, retriever_names=("bm25", "unexecuted"))
         report["cases"].append(record)
 
         with TemporaryDirectory() as directory:
@@ -188,6 +200,8 @@ class ReportTests(unittest.TestCase):
         self.assertNotIn("CREDENTIAL_SENTINEL", json.dumps(saved))
         self.assertEqual(saved["summary"]["attempted_case_count"], 1)
         self.assertEqual(saved["summary"]["completed_case_count"], 1)
+        self.assertEqual(saved["summary"]["unexecuted"]["faithfulness"]["scored_count"], 0)
+        self.assertEqual(saved["expected_case_count"], 2)
 
 
 class HarnessTests(unittest.IsolatedAsyncioTestCase):
@@ -197,6 +211,7 @@ class HarnessTests(unittest.IsolatedAsyncioTestCase):
         cohort = [
             QAExample(f"qa-{i}", f"Question {i}?", f"Answer {i}") for i in range(20)
         ]
+        names = ("bm25", "tsvector", "vector", "hybrid_bm25", "hybrid_tsvector")
         graphs = {
             name: SimpleNamespace(
                 ainvoke=AsyncMock(
@@ -207,7 +222,7 @@ class HarnessTests(unittest.IsolatedAsyncioTestCase):
                     }
                 )
             )
-            for name in ("bm25", "tsvector", "vector")
+            for name in names
         }
         scores = [
             {"name": name, "score": 0.1, "reason": "low", "error": None}
@@ -235,7 +250,16 @@ class HarnessTests(unittest.IsolatedAsyncioTestCase):
         expected_calls = [call({"question": qa.question}) for qa in cohort]
         for graph in graphs.values():
             self.assertEqual(graph.ainvoke.await_args_list, expected_calls)
-        self.assertEqual(len(report["cases"]), 60)
+        self.assertEqual(len(report["cases"]), 100)
+        self.assertEqual(report["expected_case_count"], 100)
+        self.assertEqual(report["retrievers"], list(names))
+        self.assertEqual(
+            [case["retriever"] for case in report["cases"]],
+            [name for name in names for _ in cohort],
+        )
+        for name in names:
+            self.assertEqual(report["summary"][name]["faithfulness"]["scored_count"], 20)
+            self.assertAlmostEqual(report["summary"][name]["faithfulness"]["mean"], 0.1)
         self.assertEqual(report["qa_ids"], [qa.id for qa in cohort])
         self.assertEqual(
             [case["qa_id"] for case in report["cases"][:20]],
@@ -248,6 +272,47 @@ class HarnessTests(unittest.IsolatedAsyncioTestCase):
                 for graph in graphs.values()
             )
         )
+
+    async def test_run_cases_uses_arbitrary_insertion_order_and_actual_cohort(self):
+        from test_rag import run_cases
+
+        cohort = [QAExample(str(i), f"Q{i}", "A") for i in range(2)]
+        invoked = []
+
+        def graph(name):
+            async def invoke(state):
+                invoked.append((name, state))
+                return {"answer": "A", "retrieval_context": []}
+            return SimpleNamespace(ainvoke=AsyncMock(side_effect=invoke))
+
+        graphs = {"custom_z": graph("custom_z"), "custom_a": graph("custom_a")}
+        with (
+            TemporaryDirectory() as directory,
+            patch("test_rag.build_test_case", return_value=object()),
+            patch("test_rag.build_metrics", return_value=[]),
+            patch("test_rag.score_case", new=AsyncMock(return_value=[])),
+        ):
+            for lineup, questions in ((graphs, cohort), ({}, cohort), (graphs, [])):
+                with self.subTest(names=list(lineup), questions=len(questions)):
+                    invoked.clear()
+                    report = await run_cases(
+                        questions, lineup, object(), Path(directory) / "results.json",
+                        RAGConfig(evaluation_sample_size=7),
+                    )
+                    self.assertEqual(report["retrievers"], list(lineup))
+                    expected_count = len(questions) * len(lineup)
+                    self.assertEqual(report["expected_case_count"], expected_count)
+                    self.assertEqual(len(report["cases"]), expected_count)
+                    self.assertEqual(invoked, [
+                        (name, {"question": qa.question})
+                        for name in lineup for qa in questions
+                    ])
+                    self.assertEqual(
+                        [case["retriever"] for case in report["cases"]],
+                        [name for name in lineup for _ in questions],
+                    )
+                    for name in lineup:
+                        self.assertIn(name, report["summary"])
 
     async def test_run_cases_persists_partial_graph_failure(self):
         from test_rag import run_cases
@@ -269,6 +334,10 @@ class HarnessTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(saved["cases"]), 1)
         self.assertEqual(saved["cases"][0]["error"], {"type": "RuntimeError"})
         self.assertEqual(untouched.ainvoke.await_count, 0)
+        self.assertEqual(saved["retrievers"], ["bm25", "tsvector", "vector"])
+        self.assertEqual(saved["expected_case_count"], 3)
+        for name in ("tsvector", "vector"):
+            self.assertEqual(saved["summary"][name]["faithfulness"]["scored_count"], 0)
         self.assertNotIn("secret", json.dumps(saved))
 
     async def test_run_cases_surfaces_metric_error_after_persistence(self):
@@ -317,6 +386,9 @@ class HarnessTests(unittest.IsolatedAsyncioTestCase):
         settings = SimpleNamespace(
             DATABASE_URL="postgresql+psycopg://db.example/rag",
             OPENAI_API_KEY=SimpleNamespace(get_secret_value=lambda: "configured-key"),
+            COHERE_API_KEY=SimpleNamespace(
+                get_secret_value=lambda: "configured-cohere-key"
+            ),
             rag_config=RAGConfig(),
         )
         engine = SimpleNamespace(dispose=AsyncMock())
@@ -356,6 +428,7 @@ class HarnessTests(unittest.IsolatedAsyncioTestCase):
                 ),
                 patch("test_rag.build_judge") as build_judge,
                 patch("openai.AsyncOpenAI") as async_openai,
+                patch("cohere.AsyncClientV2") as async_cohere,
             ):
                 with self.assertRaisesRegex(RuntimeError, "setup failed at database"):
                     await run_live_evaluation()
@@ -365,6 +438,9 @@ class HarnessTests(unittest.IsolatedAsyncioTestCase):
 
         build_judge.assert_not_called()
         async_openai.assert_not_called()
+        async_cohere.assert_not_called()
+        self.assertEqual(saved["retrievers"], [])
+        self.assertEqual(saved["expected_case_count"], 0)
         engine.dispose.assert_awaited_once()
         self.assertEqual(saved["qa_ids"], [])
         self.assertEqual(saved["seed"], 9)
@@ -398,6 +474,7 @@ class HarnessTests(unittest.IsolatedAsyncioTestCase):
                 ),
                 patch("test_rag.build_judge") as build_judge,
                 patch("openai.AsyncOpenAI") as async_openai,
+                patch("cohere.AsyncClientV2") as async_cohere,
             ):
                 with self.assertRaisesRegex(RuntimeError, "setup failed at cohort"):
                     await run_live_evaluation()
@@ -407,12 +484,24 @@ class HarnessTests(unittest.IsolatedAsyncioTestCase):
 
         build_judge.assert_not_called()
         async_openai.assert_not_called()
+        async_cohere.assert_not_called()
+        self.assertEqual(saved["retrievers"], [])
+        self.assertEqual(saved["expected_case_count"], 0)
         engine.dispose.assert_awaited_once()
         self.assertEqual(saved["qa_ids"], [])
         self.assertEqual(saved["errors"], [{"stage": "cohort", "type": "ValueError"}])
         self.assertNotIn("invalid cohort", json.dumps(saved))
 
     async def test_evaluation_failure_closes_client_and_disposes_engine(self):
+        await self._check_live_resources("evaluation_failure")
+
+    async def test_evaluation_success_closes_clients_and_returns_report(self):
+        await self._check_live_resources("success")
+
+    async def test_cohere_entry_failure_is_sanitized_and_cleans_resources(self):
+        await self._check_live_resources("cohere_entry_failure")
+
+    async def _check_live_resources(self, outcome):
         from test_rag import run_live_evaluation
 
         settings, engine, session, session_factory = self._live_resource_mocks()
@@ -422,6 +511,8 @@ class HarnessTests(unittest.IsolatedAsyncioTestCase):
             judge_model="judge-model",
             evaluation_seed=9,
             evaluation_sample_size=1,
+            hybrid_candidate_top_k=37,
+            rerank_model="configured-reranker",
             evaluation_metric_threshold=0.75,
         )
         settings.rag_config = config
@@ -429,6 +520,13 @@ class HarnessTests(unittest.IsolatedAsyncioTestCase):
         client_context = MagicMock()
         client_context.__aenter__ = AsyncMock(return_value=client)
         client_context.__aexit__ = AsyncMock(return_value=None)
+        cohere_client = SimpleNamespace()
+        cohere_context = MagicMock()
+        cohere_context.__aenter__ = AsyncMock(return_value=cohere_client)
+        cohere_context.__aexit__ = AsyncMock(return_value=None)
+        if outcome == "cohere_entry_failure":
+            cohere_context.__aenter__.side_effect = RuntimeError("secret")
+        sentinel_report = {"sentinel": True}
         cohort = [QAExample("qa-1", "Question?", "Answer")]
         judge = object()
         model = object()
@@ -450,7 +548,8 @@ class HarnessTests(unittest.IsolatedAsyncioTestCase):
                 ) as load_cohort,
                 patch("test_rag.build_judge", return_value=judge) as build_judge,
                 patch("test_rag.probe_judge", new=AsyncMock()),
-                patch("openai.AsyncOpenAI", return_value=client_context),
+                patch("openai.AsyncOpenAI", return_value=client_context) as async_openai,
+                patch("cohere.AsyncClientV2", return_value=cohere_context) as async_cohere,
                 patch(
                     "test_rag.build_answer_model", return_value=model
                 ) as build_answer_model,
@@ -459,31 +558,71 @@ class HarnessTests(unittest.IsolatedAsyncioTestCase):
                 ) as build_rag_graph,
                 patch(
                     "test_rag.run_cases",
-                    new=AsyncMock(side_effect=RuntimeError("case failure")),
+                    new=AsyncMock(
+                        return_value=sentinel_report,
+                        side_effect=RuntimeError("case failure")
+                        if outcome == "evaluation_failure" else None,
+                    ),
                 ) as run_cases,
             ):
-                with self.assertRaisesRegex(RuntimeError, "case failure"):
-                    await run_live_evaluation()
+                if outcome == "success":
+                    self.assertIs(await run_live_evaluation(), sentinel_report)
+                else:
+                    message = (
+                        "case failure" if outcome == "evaluation_failure"
+                        else "setup failed at reranker"
+                    )
+                    with self.assertRaisesRegex(RuntimeError, message):
+                        await run_live_evaluation()
+            saved = json.loads((Path(directory) / "results.json").read_text())
 
         load_cohort.assert_awaited_once_with(session, config)
         build_judge.assert_called_once_with(
             api_key="configured-key", base_url=None, config=config
         )
         build_answer_model.assert_called_once_with(client, config)
-        self.assertEqual(
-            [call.args[-1] for call in build_rag_graph.call_args_list], [config] * 3
-        )
-        await_args = run_cases.await_args
-        if await_args is None:
-            self.fail("run_cases was not awaited")
-        self.assertIs(await_args.args[-1], config)
+        async_openai.assert_called_once_with(api_key="configured-key", max_retries=0)
+        async_cohere.assert_called_once_with(api_key="configured-cohere-key")
         client_context.__aenter__.assert_awaited_once()
         client_context.__aexit__.assert_awaited_once()
+        session_factory.return_value.__aexit__.assert_awaited_once()
         engine.dispose.assert_awaited_once()
+        cohere_context.__aenter__.assert_awaited_once()
+        if outcome == "cohere_entry_failure":
+            build_rag_graph.assert_not_called()
+            run_cases.assert_not_awaited()
+            self.assertEqual(
+                saved["errors"], [{"stage": "reranker", "type": "RuntimeError"}]
+            )
+            self.assertEqual(saved["retrievers"], [])
+            self.assertEqual(saved["expected_case_count"], 0)
+            self.assertNotIn("secret", json.dumps(saved))
+            return
+
+        cohere_context.__aexit__.assert_awaited_once()
+        names = ("bm25", "tsvector", "vector", "hybrid_bm25", "hybrid_tsvector")
+        retrievers = [entry.args[0] for entry in build_rag_graph.call_args_list]
+        self.assertEqual([r.name for r in retrievers], list(names))
+        for entry in build_rag_graph.call_args_list:
+            self.assertIs(entry.args[1], session)
+            self.assertIs(entry.args[2], model)
+            self.assertIs(entry.args[3], config)
+        embedder = retrievers[2]._embedder
+        self.assertIs(embedder.client, client)
+        for hybrid in retrievers[3:]:
+            self.assertEqual(hybrid.candidate_top_k, 37)
+            self.assertEqual(hybrid.reranker.model, "configured-reranker")
+            self.assertIs(hybrid.reranker.client, cohere_client)
+            self.assertIs(hybrid.vector._embedder, embedder)
+        self.assertIs(retrievers[3].reranker, retrievers[4].reranker)
+        run_cases.assert_awaited_once_with(
+            cohort, dict.fromkeys(names, graph), judge,
+            Path(directory) / "results.json", config,
+        )
 
     def test_live_collection_is_opt_in_and_does_not_import_database(self):
         env = os.environ.copy()
-        for key in ("RUN_RAG_EVAL", "OPENAI_API_KEY", "DATABASE_URL"):
+        for key in ("RUN_RAG_EVAL", "OPENAI_API_KEY", "COHERE_API_KEY", "DATABASE_URL"):
             env.pop(key, None)
         result = subprocess.run(
             [sys.executable, "-m", "pytest", "tests/test_rag.py", "-q"],

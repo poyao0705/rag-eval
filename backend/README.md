@@ -81,8 +81,13 @@ The caller-owned client is a configured `cohere.AsyncClientV2` using
 
 The evaluation is offline by default. The paid harness is gated by
 `RUN_RAG_EVAL=1` and writes its report to `backend/.rag-eval/results.json`.
-It evaluates the configured validation cohort with each retriever sequentially
-(default: 20 questions, 60 cases, and five metrics per case).
+It evaluates the configured validation cohort sequentially with `bm25`,
+`tsvector`, `vector`, `hybrid_bm25`, and `hybrid_tsvector`, in that insertion order.
+Adding or removing a graph entry automatically changes execution and reporting;
+there is no separate roster to edit. Expected cases are `actual cohort size ×
+graph count`: current defaults give 20 questions, 100 cases, and five metrics per
+case (500 metric measurements). The live benchmark also requires the existing
+`COHERE_API_KEY` for hybrid reranking.
 
 Before a paid run, verify that the configured provider supports
 `RAG_EVAL_JUDGE_MODEL` and its structured-output interface. The harness uses
@@ -100,8 +105,8 @@ passages linked to each question.
 HotpotQA answers are short gold answers. They are useful expected outputs but
 do not necessarily express every multi-hop supporting fact, so contextual
 metrics should not be interpreted as a standalone answer-correctness gate.
-Each metric may make multiple judge requests; the full evaluation therefore
-costs more than 300 model calls even though it has 300 metric measurements.
+Metric measurements are not API-call counts: each metric may make multiple
+judge requests, and generation, embeddings, and hybrid reranking add calls/cost.
 
 ```bash
 # Offline: no opt-in, no paid calls.

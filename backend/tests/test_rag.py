@@ -28,10 +28,12 @@ from backend.modules.rag.generation import build_answer_model
 from backend.modules.rag.graph import build_rag_graph
 from backend.modules.retrieval.embeddings import OpenAIQueryEmbedder
 from backend.modules.retrieval.pipelines.bm25 import BM25Retriever
+from backend.modules.retrieval.pipelines.hybrid_bm25 import HybridBM25Retriever
+from backend.modules.retrieval.pipelines.hybrid_tsvector import HybridTSVectorRetriever
 from backend.modules.retrieval.pipelines.tsvector import TSVectorRetriever
 from backend.modules.retrieval.pipelines.vector import VectorRetriever
+from backend.modules.retrieval.reranking import CohereReranker
 
-RETRIEVER_NAMES = ("bm25", "tsvector", "vector")
 DEFAULT_REPORT_PATH = Path(__file__).resolve().parents[1] / ".rag-eval" / "results.json"
 BM25_INDEX_PREFLIGHT = text(
     """
@@ -68,14 +70,10 @@ async def run_cases(
     report_path: Path,
     config: RAGConfig = DEFAULT_RAG_CONFIG,
 ) -> dict[str, Any]:
-    """Run all graph cases in fixed order, persisting after every case."""
-    if set(graphs) != set(RETRIEVER_NAMES):
-        raise ValueError("graphs must contain exactly bm25, tsvector, and vector")
-
-    report = new_report(cohort, config)
+    """Run graph cases in insertion order, persisting after every case."""
+    report = new_report(cohort, config, retriever_names=tuple(graphs))
     write_report(report_path, report)
-    for name in RETRIEVER_NAMES:
-        graph = graphs[name]
+    for name, graph in graphs.items():
         for qa in cohort:
             state: Mapping[str, Any] | None = None
             try:
@@ -114,6 +112,7 @@ async def run_live_evaluation() -> dict[str, Any]:
     try:
         # These imports construct settings/clients only after the opt-in test
         # gate has allowed this function to run.
+        from cohere import AsyncClientV2
         from openai import AsyncOpenAI
         from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -150,22 +149,39 @@ async def run_live_evaluation() -> dict[str, Any]:
             generator_key = settings.OPENAI_API_KEY.get_secret_value()
             async with AsyncOpenAI(api_key=generator_key, max_retries=0) as client:
                 generator = build_answer_model(client, config)
-                graphs = {
-                    "bm25": build_rag_graph(
-                        BM25Retriever(), session, generator, config
-                    ),
-                    "tsvector": build_rag_graph(
-                        TSVectorRetriever(), session, generator, config
-                    ),
-                    "vector": build_rag_graph(
-                        VectorRetriever(OpenAIQueryEmbedder(client)),
-                        session,
-                        generator,
-                        config,
-                    ),
-                }
-                stage = "evaluation"
-                return await run_cases(cohort, graphs, judge, report_path, config)
+                stage = "reranker"
+                async with AsyncClientV2(
+                    api_key=settings.COHERE_API_KEY.get_secret_value()
+                ) as cohere_client:
+                    embedder = OpenAIQueryEmbedder(client)
+                    reranker = CohereReranker(cohere_client, model=config.rerank_model)
+                    graphs = {
+                        "bm25": build_rag_graph(
+                            BM25Retriever(), session, generator, config
+                        ),
+                        "tsvector": build_rag_graph(
+                            TSVectorRetriever(), session, generator, config
+                        ),
+                        "vector": build_rag_graph(
+                            VectorRetriever(embedder), session, generator, config
+                        ),
+                        "hybrid_bm25": build_rag_graph(
+                            HybridBM25Retriever(
+                                embedder, reranker=reranker,
+                                candidate_top_k=config.hybrid_candidate_top_k,
+                            ),
+                            session, generator, config,
+                        ),
+                        "hybrid_tsvector": build_rag_graph(
+                            HybridTSVectorRetriever(
+                                embedder, reranker=reranker,
+                                candidate_top_k=config.hybrid_candidate_top_k,
+                            ),
+                            session, generator, config,
+                        ),
+                    }
+                    stage = "evaluation"
+                    return await run_cases(cohort, graphs, judge, report_path, config)
     except Exception as error:
         if stage == "evaluation":
             raise

@@ -54,6 +54,20 @@ class PassageMigrationTests(unittest.TestCase):
         self.assertIn('op.drop_index(', migration)
         self.assertIn('op.drop_column("source_passage", "embedding")', migration)
 
+    def test_paradedb_migration_adds_compatible_reversible_bm25_index(self):
+        migration = Path(
+            "alembic/versions/b2c3d4e5f6a7_add_source_passage_paradedb_index.py"
+        ).read_text()
+
+        self.assertIn(
+            'down_revision: Union[str, Sequence[str], None] = "a9b8c7d6e5f4"',
+            migration,
+        )
+        self.assertIn("CREATE INDEX IF NOT EXISTS source_passage_paradedb_idx", migration)
+        self.assertIn("USING paradedb (id, title, text)", migration)
+        self.assertIn("WITH (key_field = 'id')", migration)
+        self.assertIn("DROP INDEX IF EXISTS source_passage_paradedb_idx", migration)
+
     def test_search_vector_migration_adds_reversible_gin_index(self):
         migration = Path(
             "alembic/versions/f1a2b3c4d5e6_add_source_passage_search_vector.py"

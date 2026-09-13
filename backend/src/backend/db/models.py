@@ -37,6 +37,14 @@ class SourcePassage(SQLModel, table=True):
         ),
         Index("ix_source_passage_content_hash", "content_hash"),
         Index(
+            "source_passage_paradedb_idx",
+            "id",
+            "title",
+            "text",
+            postgresql_using="paradedb",
+            postgresql_with={"key_field": "'id'"},
+        ),
+        Index(
             "ix_source_passage_search_vector",
             "search_vector",
             postgresql_using="gin",

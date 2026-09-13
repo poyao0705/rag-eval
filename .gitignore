@@ -4,6 +4,7 @@ node_modules
 dist
 .pnpm-store
 .venv
+backend/.rag-eval/
 
 __pycache__
 compose.override.yaml

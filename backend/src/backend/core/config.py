@@ -25,20 +25,28 @@ DEFAULT_RAG_CONFIG = RAGConfig()
 class Settings(BaseSettings):
     DATABASE_URL: PostgresDsn
     OPENAI_API_KEY: SecretStr
+    COHERE_API_KEY: SecretStr
     RAG_ANSWER_MODEL: str = DEFAULT_RAG_CONFIG.answer_model
     RAG_TOP_K: int = DEFAULT_RAG_CONFIG.top_k
     RAG_HYBRID_CANDIDATE_TOP_K: int = DEFAULT_RAG_CONFIG.hybrid_candidate_top_k
     RAG_EVAL_JUDGE_MODEL: str = DEFAULT_RAG_CONFIG.judge_model
     RAG_EVAL_SEED: int = DEFAULT_RAG_CONFIG.evaluation_seed
     RAG_EVAL_SAMPLE_SIZE: int = DEFAULT_RAG_CONFIG.evaluation_sample_size
-    RAG_RERANK_MODEL: str = DEFAULT_RAG_CONFIG.rerank_model
     RAG_EVAL_METRIC_THRESHOLD: float = DEFAULT_RAG_CONFIG.evaluation_metric_threshold
+    RAG_RERANK_MODEL: str = DEFAULT_RAG_CONFIG.rerank_model
 
     @field_validator("OPENAI_API_KEY")
     @classmethod
     def validate_openai_api_key(cls, value: SecretStr) -> SecretStr:
         if not value.get_secret_value().strip():
             raise ValueError("OPENAI_API_KEY must not be blank")
+        return value
+
+    @field_validator("COHERE_API_KEY")
+    @classmethod
+    def validate_cohere_api_key(cls, value: SecretStr) -> SecretStr:
+        if not value.get_secret_value().strip():
+            raise ValueError("COHERE_API_KEY must not be blank")
         return value
 
     @field_validator("RAG_ANSWER_MODEL", "RAG_EVAL_JUDGE_MODEL", "RAG_RERANK_MODEL")
@@ -48,9 +56,7 @@ class Settings(BaseSettings):
             raise ValueError("model name must not be blank")
         return value
 
-    @field_validator(
-        "RAG_TOP_K", "RAG_HYBRID_CANDIDATE_TOP_K", "RAG_EVAL_SAMPLE_SIZE"
-    )
+    @field_validator("RAG_TOP_K", "RAG_HYBRID_CANDIDATE_TOP_K", "RAG_EVAL_SAMPLE_SIZE")
     @classmethod
     def validate_positive_integer(cls, value: int) -> int:
         if value <= 0:
@@ -72,9 +78,9 @@ class Settings(BaseSettings):
             hybrid_candidate_top_k=self.RAG_HYBRID_CANDIDATE_TOP_K,
             judge_model=self.RAG_EVAL_JUDGE_MODEL,
             evaluation_seed=self.RAG_EVAL_SEED,
-            rerank_model=self.RAG_RERANK_MODEL,
             evaluation_sample_size=self.RAG_EVAL_SAMPLE_SIZE,
             evaluation_metric_threshold=self.RAG_EVAL_METRIC_THRESHOLD,
+            rerank_model=self.RAG_RERANK_MODEL,
         )
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")

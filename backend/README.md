@@ -1,5 +1,26 @@
 # Backend
 
+## RAG agent
+
+`build_rag_graph` uses `langchain.agents.create_agent` with one retrieval tool.
+Invoke it with `{"question": "..."}`. Each successful invocation makes two
+`gpt-5-mini` requests: a required retrieval tool call with a model-selected
+search query, then an answer with tools disabled. The retriever remains fixed
+per graph and returns up to five passages.
+
+The tool returns `Command(update=...)`, storing `retrieved_passages`,
+`retrieval_context`, `retrieval_count`, and a matching `ToolMessage` in agent
+state. The next model request reads that message; the final state retains
+these fields and adds `answer` for evaluation. Empty results still count as
+the one retrieval. Each invocation starts with fresh state.
+
+Middleware rejects missing, malformed, multiple, or repeated tool calls;
+provider tool-choice settings and prompts are not the only enforcement.
+Retrieval errors propagate without retry or final generation. Exactly-once
+means one retrieval in a successful invocation, not crash-safe deduplication
+across caller retries. Providers must support required tool choice, disabling
+parallel calls, and the OpenAI Responses API.
+
 ## RAG evaluation
 
 The evaluation is offline by default. The paid harness is gated by

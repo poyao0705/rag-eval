@@ -11,18 +11,23 @@ import unittest
 from pathlib import Path
 from typing import Any, Mapping, cast
 
+from rag_eval.cohort import QAExample, load_cohort
+from rag_eval.report import case_record, new_report, write_report
+from rag_eval.scoring import (
+    build_judge,
+    build_metrics,
+    build_test_case,
+    probe_judge,
+    score_case,
+)
 from sqlalchemy import text
 
-from backend.modules.rag.generation import OpenAIAnswerGenerator
+from backend.modules.rag.generation import build_answer_model
 from backend.modules.rag.graph import build_rag_graph
 from backend.modules.retrieval.embeddings import OpenAIQueryEmbedder
 from backend.modules.retrieval.pipelines.bm25 import BM25Retriever
 from backend.modules.retrieval.pipelines.tsvector import TSVectorRetriever
 from backend.modules.retrieval.pipelines.vector import VectorRetriever
-from rag_eval.cohort import QAExample, load_cohort
-from rag_eval.report import case_record, new_report, write_report
-from rag_eval.scoring import build_judge, build_metrics, build_test_case, probe_judge, score_case
-
 
 RETRIEVER_NAMES = ("bm25", "tsvector", "vector")
 DEFAULT_REPORT_PATH = Path(__file__).resolve().parents[1] / ".rag-eval" / "results.json"
@@ -46,7 +51,9 @@ BM25_INDEX_PREFLIGHT = text(
 )
 
 
-def _write_setup_error(report_path: Path, report: dict[str, Any], stage: str, error: Exception) -> None:
+def _write_setup_error(
+    report_path: Path, report: dict[str, Any], stage: str, error: Exception
+) -> None:
     """Persist only a safe type/stage pair for a live setup failure."""
     report["errors"].append({"stage": stage, "type": type(error).__name__})
     write_report(report_path, report)
@@ -84,9 +91,7 @@ async def run_cases(
             report["cases"].append(case_record(qa, name, state, scores))
             write_report(report_path, report)
             if any(item.get("error") is not None for item in scores):
-                raise RuntimeError(
-                    f"RAG scoring failed: {name}/{qa.id}; see report"
-                )
+                raise RuntimeError(f"RAG scoring failed: {name}/{qa.id}; see report")
     return report
 
 
@@ -108,6 +113,7 @@ async def run_live_evaluation() -> dict[str, Any]:
         # gate has allowed this function to run.
         from openai import AsyncOpenAI
         from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
         from backend.core.config import Settings
 
         settings = Settings()  # pyright: ignore[reportCallIssue]
@@ -136,10 +142,12 @@ async def run_live_evaluation() -> dict[str, Any]:
             stage = "generator"
             generator_key = settings.OPENAI_API_KEY.get_secret_value()
             async with AsyncOpenAI(api_key=generator_key, max_retries=0) as client:
-                generator = OpenAIAnswerGenerator(client)
+                generator = build_answer_model(client)
                 graphs = {
                     "bm25": build_rag_graph(BM25Retriever(), session, generator),
-                    "tsvector": build_rag_graph(TSVectorRetriever(), session, generator),
+                    "tsvector": build_rag_graph(
+                        TSVectorRetriever(), session, generator
+                    ),
                     "vector": build_rag_graph(
                         VectorRetriever(OpenAIQueryEmbedder(client)),
                         session,
@@ -152,7 +160,9 @@ async def run_live_evaluation() -> dict[str, Any]:
         if stage == "evaluation":
             raise
         _write_setup_error(report_path, report, stage, error)
-        raise RuntimeError(f"RAG evaluation setup failed at {stage}; see report") from None
+        raise RuntimeError(
+            f"RAG evaluation setup failed at {stage}; see report"
+        ) from None
     finally:
         if engine is not None:
             await engine.dispose()

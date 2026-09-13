@@ -375,6 +375,7 @@ class HarnessTests(unittest.IsolatedAsyncioTestCase):
                 patch("test_rag.build_judge", return_value=object()),
                 patch("test_rag.probe_judge", new=AsyncMock()),
                 patch("openai.AsyncOpenAI", return_value=client_context),
+                patch("test_rag.build_answer_model", return_value=object()),
                 patch("test_rag.build_rag_graph", return_value=object()),
                 patch("test_rag.run_cases", new=AsyncMock(side_effect=RuntimeError("case failure"))),
             ):
@@ -509,7 +510,7 @@ class ScoringTests(unittest.IsolatedAsyncioTestCase):
 
         qa = QAExample("qa-1", "Q", "A")
         case = build_test_case(
-            qa, {"question": "Q", "answer": "Actual", "retrieval_context": []}
+            qa, {"question": "Q", "answer": "Actual", "retrieval_context": [], "messages": []}
         )
         self.assertEqual(case.retrieval_context, [])
 

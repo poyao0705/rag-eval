@@ -12,7 +12,7 @@ class RAGConfig:
     answer_model: str = "gpt-5-mini"
     top_k: int = 10
     hybrid_candidate_top_k: int = 50
-    judge_model: str = "gpt-5.4"
+    judge_model: str = "gpt-4.1"
     evaluation_seed: int = 42
     evaluation_sample_size: int = 20
     evaluation_metric_threshold: float = 0.5

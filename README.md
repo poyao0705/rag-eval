@@ -33,47 +33,6 @@ docker compose exec postgres \
   -c "SELECT extname, extversion FROM pg_extension WHERE extname IN ('vector', 'pg_search', 'unaccent') ORDER BY extname;"
 ```
 
-#### Upgrading from PostgreSQL 17
-
-PostgreSQL 17 data directories cannot be reused by PostgreSQL 18. This project
-uses a destructive reset for local development, so back up anything you need
-before removing the volume:
-
-```bash
-# Destructive: deletes the local PostgreSQL database and all generated data.
-docker compose down -v --remove-orphans
-docker compose pull postgres
-docker compose up -d postgres
-```
-
-The fresh PostgreSQL 18 data directory runs ParadeDB's bootstrap and the project
-init script automatically. Rerun the backend migrations, ingestion, passage
-materialization, and embedding steps below to recreate the application data.
-For data that must be preserved, use a PostgreSQL logical dump and restore
-instead of reusing the PostgreSQL 17 volume.
-
-#### Query the BM25 index
-
-The Alembic migrations create `source_passage_paradedb_idx` after creating
-`source_passage`. The index uses `id` as ParadeDB's unique key and indexes
-`title` and `text` for BM25 retrieval.
-
-```bash
-docker compose exec postgres psql -U postgres -d deep_agents_rag
-```
-
-```sql
-SELECT id, title, pdb.score(id) AS score
-FROM source_passage
-WHERE text ||| 'distributed systems'
-ORDER BY pdb.score(id) DESC, id ASC
-LIMIT 10;
-```
-
-The official image is pinned by its PostgreSQL 18 tag and multi-architecture
-digest in `compose.yaml`. Update that image reference deliberately when
-upgrading ParadeDB.
-
 ### Backend
 
 1. Go to the `backend` directory.
@@ -147,6 +106,26 @@ backend/.rag-eval/results.json
 ```
 
 The report contains per-case results and aggregate metrics under `summary`.
+
+### Evaluation method
+
+The evaluation uses [DeepEval](https://deepeval.com/) (`deepeval>=4.2.2`)
+with the configured judge model as an LLM evaluator. Heatmaps use
+[Matplotlib](https://matplotlib.org/) (`matplotlib>=3.11.2`) with its headless
+Agg backend to write static PNGs.
+
+Each score ranges from 0 to 1; higher is better:
+
+| Metric | What it measures |
+| --- | --- |
+| Answer relevancy | Whether generated answer stays relevant to the question. Measures answer focus, not factual correctness. |
+| Faithfulness | Whether claims in generated answer are supported by retrieved context. Measures grounding, not truth outside retrieved context. |
+| Contextual precision | Whether relevant passages appear above irrelevant passages in the ranked retrieval results. Measures ranking and reranking quality. |
+| Contextual recall | Whether retrieved passages contain the information needed to produce the expected answer. Measures retrieval completeness. |
+| Contextual relevancy | How much of the retrieved context is relevant to the question. Measures retrieval signal-to-noise. |
+
+The report stores per-case scores and retriever-level means. It does not combine
+these metrics into one overall score.
 
 ### RAG evaluation summary
 

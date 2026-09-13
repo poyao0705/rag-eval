@@ -12,7 +12,7 @@ import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 visualize = importlib.import_module("rag_eval.visualize")
 _matrices = visualize._matrices
@@ -268,3 +268,71 @@ class RenderingTests(unittest.TestCase):
             text=True,
             check=False,
         )
+
+
+class CollectionTests(unittest.TestCase):
+    def test_live_module_import_does_not_load_matplotlib(self) -> None:
+        env = os.environ.copy()
+        env.pop("RUN_RAG_EVAL", None)
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import sys; import test_rag; assert 'matplotlib' not in sys.modules",
+            ],
+            cwd=Path(__file__).parent,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+
+class LiveChartHookTests(unittest.IsolatedAsyncioTestCase):
+    async def test_renders_only_after_success(self) -> None:
+        from test_rag import DEFAULT_REPORT_PATH, TestRAGEvaluation
+
+        events: list[str] = []
+
+        async def evaluate() -> dict:
+            events.append("evaluation")
+            return {}
+
+        def render(path: Path) -> tuple[Path, Path]:
+            self.assertEqual(path, DEFAULT_REPORT_PATH)
+            events.append("render")
+            return (path, path)
+
+        with (
+            patch("test_rag.run_live_evaluation", side_effect=evaluate),
+            patch("rag_eval.visualize.render_report", side_effect=render),
+        ):
+            await TestRAGEvaluation("test_live_evaluation").test_live_evaluation()
+        self.assertEqual(events, ["evaluation", "render"])
+
+    async def test_evaluation_failure_does_not_render(self) -> None:
+        from test_rag import TestRAGEvaluation
+
+        with (
+            patch(
+                "test_rag.run_live_evaluation",
+                new=AsyncMock(side_effect=RuntimeError("evaluation failed")),
+            ),
+            patch("rag_eval.visualize.render_report") as render,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "evaluation failed"):
+                await TestRAGEvaluation("test_live_evaluation").test_live_evaluation()
+            render.assert_not_called()
+
+    async def test_render_failure_is_visible_without_retrying_evaluation(self) -> None:
+        from test_rag import TestRAGEvaluation
+
+        with patch(
+            "test_rag.run_live_evaluation", new=AsyncMock(return_value={})
+        ) as evaluate, patch(
+            "rag_eval.visualize.render_report", side_effect=OSError("disk full")
+        ):
+            with self.assertRaisesRegex(OSError, "disk full"):
+                await TestRAGEvaluation("test_live_evaluation").test_live_evaluation()
+            evaluate.assert_awaited_once()

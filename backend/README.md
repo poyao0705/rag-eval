@@ -136,5 +136,6 @@ uv run alembic current
 uv run alembic upgrade b2c3d4e5f6a7
 
 # Paid: only after provider compatibility and explicit evaluation authorization.
+# Success writes results.json plus both heatmaps under .rag-eval/.
 RUN_RAG_EVAL=1 uv run pytest tests/test_rag.py -q
 ```

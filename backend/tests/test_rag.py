@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import unittest
+from importlib import import_module
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, cast
@@ -200,6 +201,9 @@ async def run_live_evaluation() -> dict[str, Any]:
 class TestRAGEvaluation(unittest.IsolatedAsyncioTestCase):
     async def test_live_evaluation(self) -> None:
         await run_live_evaluation()
+        render_report = import_module("rag_eval.visualize").render_report
+
+        render_report(DEFAULT_REPORT_PATH)
 
 
 if __name__ == "__main__":

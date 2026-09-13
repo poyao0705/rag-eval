@@ -28,6 +28,7 @@ Set RAG and evaluation knobs in `backend/.env`:
 ```dotenv
 RAG_ANSWER_MODEL=gpt-5-mini
 RAG_TOP_K=10
+RAG_HYBRID_CANDIDATE_TOP_K=50
 RAG_EVAL_JUDGE_MODEL=gpt-5.4
 RAG_EVAL_SEED=42
 RAG_EVAL_SAMPLE_SIZE=20
@@ -35,10 +36,12 @@ RAG_EVAL_METRIC_THRESHOLD=0.5
 ```
 
 These settings are built once per evaluation and passed to retrieval, answer
-model, cohort selection, scoring, and report metadata. `RAG_TOP_K` controls
-both the actual retrieval request and `results.json`; it is not report-only.
-Positive integers are required for `RAG_TOP_K` and `RAG_EVAL_SAMPLE_SIZE`;
-the metric threshold must be in `[0, 1]`.
+model, cohort selection, scoring, and report metadata. `RAG_TOP_K` controls the
+final retrieval result count and `results.json`; it is not report-only.
+`RAG_HYBRID_CANDIDATE_TOP_K` controls how many candidates each hybrid component
+requests before fusion. Hybrid retrieval uses the larger of these two limits.
+Positive integers are required for `RAG_TOP_K`, `RAG_HYBRID_CANDIDATE_TOP_K`, and
+`RAG_EVAL_SAMPLE_SIZE`; the metric threshold must be in `[0, 1]`.
 
 ## RAG evaluation
 

@@ -1,6 +1,6 @@
 import unittest
 
-from backend.scripts.helpers.passage import (
+from backend.scripts.utils.passage import (
     deduplicate_candidates,
     extract_context,
     normalize_text,

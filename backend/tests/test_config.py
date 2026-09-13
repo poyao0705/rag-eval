@@ -59,6 +59,7 @@ class SettingsTests(unittest.TestCase):
             RAGConfig(
                 answer_model="answer-model",
                 top_k=10,
+                hybrid_candidate_top_k=50,
                 judge_model="judge-model",
                 evaluation_seed=9,
                 evaluation_sample_size=3,
@@ -66,9 +67,25 @@ class SettingsTests(unittest.TestCase):
             ),
         )
 
+    def test_hybrid_candidate_top_k_reads_from_environment(self):
+        with patch.dict(
+            os.environ,
+            {
+                "DATABASE_URL": DATABASE_URL,
+                "OPENAI_API_KEY": "sk-test",
+                "RAG_HYBRID_CANDIDATE_TOP_K": "25",
+            },
+            clear=True,
+        ):
+            settings = Settings(_env_file=None)  # pyright: ignore[reportCallIssue]
+
+        self.assertEqual(settings.rag_config.hybrid_candidate_top_k, 25)
+
     def test_rag_config_rejects_invalid_numeric_values(self):
         for field, value in (
             ("RAG_TOP_K", 0),
+            ("RAG_HYBRID_CANDIDATE_TOP_K", 0),
+            ("RAG_HYBRID_CANDIDATE_TOP_K", -1),
             ("RAG_EVAL_SAMPLE_SIZE", 0),
             ("RAG_EVAL_METRIC_THRESHOLD", -0.01),
             ("RAG_EVAL_METRIC_THRESHOLD", 1.01),

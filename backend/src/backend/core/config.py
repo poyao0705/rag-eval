@@ -11,6 +11,7 @@ _ = load_dotenv()
 class RAGConfig:
     answer_model: str = "gpt-5-mini"
     top_k: int = 10
+    hybrid_candidate_top_k: int = 50
     judge_model: str = "gpt-5.4"
     evaluation_seed: int = 42
     evaluation_sample_size: int = 20
@@ -25,6 +26,7 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: SecretStr
     RAG_ANSWER_MODEL: str = DEFAULT_RAG_CONFIG.answer_model
     RAG_TOP_K: int = DEFAULT_RAG_CONFIG.top_k
+    RAG_HYBRID_CANDIDATE_TOP_K: int = DEFAULT_RAG_CONFIG.hybrid_candidate_top_k
     RAG_EVAL_JUDGE_MODEL: str = DEFAULT_RAG_CONFIG.judge_model
     RAG_EVAL_SEED: int = DEFAULT_RAG_CONFIG.evaluation_seed
     RAG_EVAL_SAMPLE_SIZE: int = DEFAULT_RAG_CONFIG.evaluation_sample_size
@@ -44,7 +46,9 @@ class Settings(BaseSettings):
             raise ValueError("model name must not be blank")
         return value
 
-    @field_validator("RAG_TOP_K", "RAG_EVAL_SAMPLE_SIZE")
+    @field_validator(
+        "RAG_TOP_K", "RAG_HYBRID_CANDIDATE_TOP_K", "RAG_EVAL_SAMPLE_SIZE"
+    )
     @classmethod
     def validate_positive_integer(cls, value: int) -> int:
         if value <= 0:
@@ -63,6 +67,7 @@ class Settings(BaseSettings):
         return RAGConfig(
             answer_model=self.RAG_ANSWER_MODEL,
             top_k=self.RAG_TOP_K,
+            hybrid_candidate_top_k=self.RAG_HYBRID_CANDIDATE_TOP_K,
             judge_model=self.RAG_EVAL_JUDGE_MODEL,
             evaluation_seed=self.RAG_EVAL_SEED,
             evaluation_sample_size=self.RAG_EVAL_SAMPLE_SIZE,

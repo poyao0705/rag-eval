@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.models import SourcePassage
 from backend.modules.retrieval.contracts import RetrievalRequest, RetrievedPassage
-from backend.modules.retrieval.pipelines._common import ranked_passages
+from backend.modules.retrieval.utils import ranked_passages
 
 
 class BM25Retriever:

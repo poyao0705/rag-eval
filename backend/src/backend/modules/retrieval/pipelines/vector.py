@@ -10,7 +10,7 @@ from backend.modules.retrieval.contracts import (
     RetrievedPassage,
 )
 from backend.modules.retrieval.embeddings import EMBEDDING_DIMENSIONS
-from backend.modules.retrieval.pipelines._common import ranked_passages
+from backend.modules.retrieval.utils import ranked_passages
 
 
 class VectorRetriever:

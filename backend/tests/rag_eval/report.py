@@ -13,7 +13,7 @@ from rag_eval.cohort import SEED, QAExample
 
 GENERATOR_MODEL = "gpt-5-mini"
 JUDGE_MODEL = "gpt-5.4"
-TOP_K = 5
+TOP_K = 10
 EXPECTED_CASE_COUNT = 60
 RETRIEVERS = ("bm25", "tsvector", "vector")
 METRICS = (

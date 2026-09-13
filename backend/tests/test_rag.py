@@ -70,7 +70,7 @@ async def run_cases(
     report_path: Path,
     config: RAGConfig = DEFAULT_RAG_CONFIG,
 ) -> dict[str, Any]:
-    """Run graph cases in insertion order, persisting after every case."""
+    """Validate report names, then run in insertion order and persist each case."""
     report = new_report(cohort, config, retriever_names=tuple(graphs))
     write_report(report_path, report)
     for name, graph in graphs.items():

@@ -88,6 +88,9 @@ there is no separate roster to edit. Expected cases are `actual cohort size ×
 graph count`: current defaults give 20 questions, 100 cases, and five metrics per
 case (500 metric measurements). The live benchmark also requires the existing
 `COHERE_API_KEY` for hybrid reranking.
+Pipeline names may not be `attempted_case_count`, `completed_case_count`,
+`failed_case_count`, or `expected_case_count`: these flat report keys are
+reserved and rejected before execution or summary grouping.
 
 Before a paid run, verify that the configured provider supports
 `RAG_EVAL_JUDGE_MODEL` and its structured-output interface. The harness uses

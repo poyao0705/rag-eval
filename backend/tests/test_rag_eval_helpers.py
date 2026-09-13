@@ -135,6 +135,28 @@ class ReportTests(unittest.TestCase):
             {2, 2, 0, 60},
         )
 
+    def test_report_rejects_reserved_retriever_names(self):
+        for name in (
+            "attempted_case_count", "completed_case_count",
+            "failed_case_count", "expected_case_count",
+        ):
+            cases = [{"retriever": name, "metrics": [], "error": None}]
+            for operation in (
+                lambda: new_report([], retriever_names=(name,)),
+                lambda: summarize([], retriever_names=(name,)),
+                lambda: summarize(cases),
+            ):
+                with self.subTest(name=name, operation=operation):
+                    with self.assertRaisesRegex(ValueError, "reserved"):
+                        operation()
+
+        names = ("expected_case_count_custom", "retrievers", "summary")
+        report = new_report([], retriever_names=names)
+        self.assertEqual(report["retrievers"], list(names))
+        summary = summarize([], retriever_names=names)
+        for name in names:
+            self.assertIn("faithfulness", summary[name])
+
     def test_standalone_summary_infers_names_and_attempted_count(self):
         summary = summarize([
             {"retriever": name, "metrics": [], "error": None}
@@ -313,6 +335,24 @@ class HarnessTests(unittest.IsolatedAsyncioTestCase):
                     )
                     for name in lineup:
                         self.assertIn(name, report["summary"])
+
+    async def test_run_cases_rejects_reserved_names_before_execution(self):
+        from test_rag import run_cases
+
+        cohort = [QAExample("qa-1", "Question?", "Answer")]
+        for name in (
+            "attempted_case_count", "completed_case_count",
+            "failed_case_count", "expected_case_count",
+        ):
+            with self.subTest(name=name), TemporaryDirectory() as directory:
+                graph = SimpleNamespace(ainvoke=AsyncMock())
+                path = Path(directory) / "results.json"
+                with self.assertRaisesRegex(ValueError, "reserved"):
+                    await run_cases(
+                        cohort, {"custom_z": graph, name: graph}, object(), path,
+                    )
+                graph.ainvoke.assert_not_awaited()
+                self.assertFalse(path.exists())
 
     async def test_run_cases_persists_partial_graph_failure(self):
         from test_rag import run_cases

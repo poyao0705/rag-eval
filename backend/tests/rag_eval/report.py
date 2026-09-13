@@ -21,6 +21,15 @@ METRICS = (
 )
 
 
+def _validate_retriever_names(retriever_names: Sequence[str]) -> None:
+    """Keep pipeline groups from colliding with flat summary metadata."""
+    if set(retriever_names).intersection({
+        "attempted_case_count", "completed_case_count",
+        "failed_case_count", "expected_case_count",
+    }):
+        raise ValueError("retriever names contain a reserved report key")
+
+
 def new_report(
     cohort: Sequence[QAExample],
     config: RAGConfig = DEFAULT_RAG_CONFIG,
@@ -28,6 +37,7 @@ def new_report(
     retriever_names: Sequence[str] = (),
 ) -> dict[str, Any]:
     """Return an empty report carrying configured evaluation metadata."""
+    _validate_retriever_names(retriever_names)
     return {
         "schema_version": 1,
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -121,6 +131,7 @@ def summarize(
     """Summarize successful scores and make every missing measurement visible."""
     if retriever_names is None:
         retriever_names = list(dict.fromkeys(case["retriever"] for case in cases))
+    _validate_retriever_names(retriever_names)
     if expected_case_count is None:
         expected_case_count = len(cases)
     totals: dict[str, dict[str, dict[str, Any]]] = {

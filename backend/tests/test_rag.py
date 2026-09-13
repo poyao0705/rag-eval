@@ -23,6 +23,7 @@ from rag_eval.scoring import (
 )
 from sqlalchemy import text
 
+from backend.core.config import DEFAULT_RAG_CONFIG, RAGConfig
 from backend.modules.rag.generation import build_answer_model
 from backend.modules.rag.graph import build_rag_graph
 from backend.modules.retrieval.embeddings import OpenAIQueryEmbedder
@@ -65,12 +66,13 @@ async def run_cases(
     graphs: Mapping[str, Any],
     judge: Any,
     report_path: Path,
+    config: RAGConfig = DEFAULT_RAG_CONFIG,
 ) -> dict[str, Any]:
     """Run all graph cases in fixed order, persisting after every case."""
     if set(graphs) != set(RETRIEVER_NAMES):
         raise ValueError("graphs must contain exactly bm25, tsvector, and vector")
 
-    report = new_report(cohort)
+    report = new_report(cohort, config)
     write_report(report_path, report)
     for name in RETRIEVER_NAMES:
         graph = graphs[name]
@@ -79,7 +81,7 @@ async def run_cases(
             try:
                 state = await graph.ainvoke({"question": qa.question})
                 case = build_test_case(qa, cast(Any, state))
-                scores = await score_case(case, build_metrics(judge))
+                scores = await score_case(case, build_metrics(judge, config))
             except Exception as error:
                 report["cases"].append(
                     case_record(qa, name, state, [], {"type": type(error).__name__})
@@ -105,7 +107,7 @@ async def _verify_bm25_index(session: Any) -> None:
 async def run_live_evaluation() -> dict[str, Any]:
     """Own live resources and execute the explicitly authorized benchmark."""
     report_path = DEFAULT_REPORT_PATH
-    report = new_report([])
+    report = new_report([], DEFAULT_RAG_CONFIG)
     write_report(report_path, report)
     engine = None
     stage = "settings"
@@ -118,6 +120,9 @@ async def run_live_evaluation() -> dict[str, Any]:
         from backend.core.config import Settings
 
         settings = Settings()  # pyright: ignore[reportCallIssue]
+        config = settings.rag_config
+        report = new_report([], config)
+        write_report(report_path, report)
         engine = create_async_engine(str(settings.DATABASE_URL))
         session_factory = async_sessionmaker(engine, expire_on_commit=False)
         stage = "database"
@@ -125,8 +130,8 @@ async def run_live_evaluation() -> dict[str, Any]:
             await session.execute(text("SET TRANSACTION READ ONLY"))
             await _verify_bm25_index(session)
             stage = "cohort"
-            cohort = await load_cohort(session)
-            report = new_report(cohort)
+            cohort = await load_cohort(session, config)
+            report = new_report(cohort, config)
             write_report(report_path, report)
 
             stage = "judge_construction"
@@ -136,6 +141,7 @@ async def run_live_evaluation() -> dict[str, Any]:
             judge = build_judge(
                 api_key=judge_key,
                 base_url=os.environ.get("RAG_JUDGE_BASE_URL"),
+                config=config,
             )
             stage = "judge_probe"
             await probe_judge(judge)
@@ -143,20 +149,23 @@ async def run_live_evaluation() -> dict[str, Any]:
             stage = "generator"
             generator_key = settings.OPENAI_API_KEY.get_secret_value()
             async with AsyncOpenAI(api_key=generator_key, max_retries=0) as client:
-                generator = build_answer_model(client)
+                generator = build_answer_model(client, config)
                 graphs = {
-                    "bm25": build_rag_graph(BM25Retriever(), session, generator),
+                    "bm25": build_rag_graph(
+                        BM25Retriever(), session, generator, config
+                    ),
                     "tsvector": build_rag_graph(
-                        TSVectorRetriever(), session, generator
+                        TSVectorRetriever(), session, generator, config
                     ),
                     "vector": build_rag_graph(
                         VectorRetriever(OpenAIQueryEmbedder(client)),
                         session,
                         generator,
+                        config,
                     ),
                 }
                 stage = "evaluation"
-                return await run_cases(cohort, graphs, judge, report_path)
+                return await run_cases(cohort, graphs, judge, report_path, config)
     except Exception as error:
         if stage == "evaluation":
             raise

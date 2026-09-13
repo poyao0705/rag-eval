@@ -2,7 +2,8 @@ from langchain_openai import ChatOpenAI
 from openai import AsyncOpenAI
 from pydantic import SecretStr
 
-MODEL = "gpt-5-mini"
+from backend.core.config import DEFAULT_RAG_CONFIG, RAGConfig
+
 INSTRUCTIONS = (
     "Search for evidence with the retrieve tool exactly once before answering. "
     "Choose a focused search query for the question. "
@@ -13,10 +14,12 @@ INSTRUCTIONS = (
 )
 
 
-def build_answer_model(client: AsyncOpenAI) -> ChatOpenAI:
-    """Use the caller-owned async client for the agent's Responses API requests."""
+def build_answer_model(
+    client: AsyncOpenAI, config: RAGConfig = DEFAULT_RAG_CONFIG
+) -> ChatOpenAI:
+    """Use the caller-owned async client for configured agent requests."""
     return ChatOpenAI(
-        model=MODEL,
+        model=config.answer_model,
         api_key=SecretStr(client.api_key),
         base_url=str(client.base_url),
         root_async_client=client,

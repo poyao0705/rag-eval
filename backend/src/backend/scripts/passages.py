@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.db.database import SessionFactory
 from backend.db.models import HotpotQA, HotpotQAContext, SourcePassage
-from backend.scripts.helpers.passage import extract_context
+from backend.scripts.utils.passage import extract_context
 
 IDENTITY_LOOKUP_BATCH_SIZE = 500
 

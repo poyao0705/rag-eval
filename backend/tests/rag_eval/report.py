@@ -9,12 +9,9 @@ from numbers import Real
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from rag_eval.cohort import SEED, QAExample
+from backend.core.config import DEFAULT_RAG_CONFIG, RAGConfig
+from rag_eval.cohort import QAExample
 
-GENERATOR_MODEL = "gpt-5-mini"
-JUDGE_MODEL = "gpt-5.4"
-TOP_K = 10
-EXPECTED_CASE_COUNT = 60
 RETRIEVERS = ("bm25", "tsvector", "vector")
 METRICS = (
     "answer_relevancy",
@@ -25,16 +22,19 @@ METRICS = (
 )
 
 
-def new_report(cohort: Sequence[QAExample]) -> dict[str, Any]:
-    """Return an empty report carrying the fixed evaluation metadata."""
+def new_report(
+    cohort: Sequence[QAExample], config: RAGConfig = DEFAULT_RAG_CONFIG
+) -> dict[str, Any]:
+    """Return an empty report carrying configured evaluation metadata."""
     return {
         "schema_version": 1,
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "seed": SEED,
+        "seed": config.evaluation_seed,
         "qa_ids": [qa.id for qa in cohort],
-        "generator_model": GENERATOR_MODEL,
-        "judge_model": JUDGE_MODEL,
-        "top_k": TOP_K,
+        "generator_model": config.answer_model,
+        "judge_model": config.judge_model,
+        "top_k": config.top_k,
+        "expected_case_count": config.evaluation_sample_size * len(RETRIEVERS),
         "cases": [],
         "errors": [],
     }
@@ -109,7 +109,12 @@ def _valid_score(score: Any) -> bool:
     )
 
 
-def summarize(cases: list[dict[str, Any]]) -> dict[str, Any]:
+def summarize(
+    cases: list[dict[str, Any]],
+    *,
+    expected_case_count: int = DEFAULT_RAG_CONFIG.evaluation_sample_size
+    * len(RETRIEVERS),
+) -> dict[str, Any]:
     """Summarize successful scores and make every missing measurement visible."""
     totals: dict[str, dict[str, dict[str, Any]]] = {
         retriever: {metric: {"scores": [], "error_count": 0} for metric in METRICS}
@@ -158,7 +163,7 @@ def summarize(cases: list[dict[str, Any]]) -> dict[str, Any]:
             "attempted_case_count": attempted,
             "completed_case_count": completed,
             "failed_case_count": attempted - completed,
-            "expected_case_count": EXPECTED_CASE_COUNT,
+            "expected_case_count": expected_case_count,
         }
     )
     return summary
@@ -167,7 +172,9 @@ def summarize(cases: list[dict[str, Any]]) -> dict[str, Any]:
 def write_report(path: Path, report: dict[str, Any]) -> None:
     """Atomically write a report after recomputing its summary."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    report["summary"] = summarize(report["cases"])
+    report["summary"] = summarize(
+        report["cases"], expected_case_count=report["expected_case_count"]
+    )
     temporary = path.with_suffix(".tmp")
     temporary.write_text(
         json.dumps(report, indent=2, allow_nan=False), encoding="utf-8"

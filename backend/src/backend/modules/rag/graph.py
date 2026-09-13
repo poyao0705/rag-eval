@@ -19,6 +19,7 @@ from langgraph.runtime import Runtime
 from langgraph.types import Command
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.core.config import DEFAULT_RAG_CONFIG, RAGConfig
 from backend.modules.rag.generation import INSTRUCTIONS
 from backend.modules.retrieval.contracts import (
     RetrievalRequest,
@@ -84,7 +85,8 @@ async def single_retrieval(
         args = call["args"]
         if set(args) != {"query"} or not isinstance(args["query"], str):
             raise ValueError("retrieval tool requires only a string query")
-        RetrievalRequest(query=args["query"], top_k=5)
+        if not args["query"].strip():
+            raise ValueError("retrieval tool query must not be blank")
     return response
 
 
@@ -97,14 +99,20 @@ def build_rag_graph(
     retriever: Retriever,
     session: AsyncSession,
     generator: BaseChatModel,
+    config: RAGConfig = DEFAULT_RAG_CONFIG,
 ) -> CompiledStateGraph:
+    if config.top_k <= 0:
+        raise ValueError("top_k must be greater than zero")
+
     @tool
     async def retrieve(query: str, runtime: ToolRuntime) -> Command:
         """Search the document corpus for evidence using one focused search query."""
         if runtime.state.get("retrieval_count", 0) != 0:
             raise ValueError("retrieval tool may only be called once")
         passages = list(
-            await retriever.retrieve(RetrievalRequest(query=query, top_k=5), session)
+            await retriever.retrieve(
+                RetrievalRequest(query=query, top_k=config.top_k), session
+            )
         )
         context = [f"{passage.title}\n{passage.text}" for passage in passages]
         return Command(

@@ -3,8 +3,8 @@ from dataclasses import dataclass
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-SEED = 42
-SAMPLE_SIZE = 20
+from backend.core.config import DEFAULT_RAG_CONFIG, RAGConfig
+
 COHORT_SQL = """
 SELECT q.id, q.question, q.answer
 FROM hotpot_qa AS q
@@ -26,13 +26,24 @@ class QAExample:
     answer: str
 
 
-async def load_cohort(session: AsyncSession) -> list[QAExample]:
+async def load_cohort(
+    session: AsyncSession, config: RAGConfig = DEFAULT_RAG_CONFIG
+) -> list[QAExample]:
     result = await session.execute(
-        text(COHORT_SQL), {"seed": SEED, "sample_size": SAMPLE_SIZE}
+        text(COHORT_SQL),
+        {
+            "seed": config.evaluation_seed,
+            "sample_size": config.evaluation_sample_size,
+        },
     )
     cohort = [QAExample(**row) for row in result.mappings().all()]
-    if len(cohort) != SAMPLE_SIZE or len({qa.id for qa in cohort}) != SAMPLE_SIZE:
-        raise ValueError("expected 20 distinct eligible validation questions")
+    if (
+        len(cohort) != config.evaluation_sample_size
+        or len({qa.id for qa in cohort}) != config.evaluation_sample_size
+    ):
+        raise ValueError(
+            f"expected {config.evaluation_sample_size} distinct eligible validation questions"
+        )
     if any(not qa.question.strip() or not qa.answer.strip() for qa in cohort):
         raise ValueError("cohort contains a blank question or answer")
     return cohort

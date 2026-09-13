@@ -17,11 +17,9 @@ from deepeval.metrics import (
 from deepeval.test_case import LLMTestCase
 from pydantic import BaseModel
 
+from backend.core.config import DEFAULT_RAG_CONFIG, RAGConfig
 from backend.modules.rag.graph import RAGState
 from rag_eval.cohort import QAExample
-
-# DeepEval 4.2.2's recommended/default judge, pinned explicitly for this harness.
-JUDGE_MODEL = "gpt-5.4"
 
 
 class JudgeProbe(BaseModel):
@@ -42,8 +40,10 @@ def build_test_case(qa: QAExample, state: RAGState) -> LLMTestCase:
     )
 
 
-def build_metrics(judge: Any) -> list[tuple[str, BaseMetric]]:
-    """Create fresh, explicitly configured instances for one test case."""
+def build_metrics(
+    judge: Any, config: RAGConfig = DEFAULT_RAG_CONFIG
+) -> list[tuple[str, BaseMetric]]:
+    """Create fresh configured metric instances for one test case."""
     metric_types = (
         ("answer_relevancy", AnswerRelevancyMetric),
         ("faithfulness", FaithfulnessMetric),
@@ -52,7 +52,14 @@ def build_metrics(judge: Any) -> list[tuple[str, BaseMetric]]:
         ("contextual_relevancy", ContextualRelevancyMetric),
     )
     return [
-        (key, metric_type(model=judge, include_reason=True, threshold=0.5))
+        (
+            key,
+            metric_type(
+                model=judge,
+                include_reason=True,
+                threshold=config.evaluation_metric_threshold,
+            ),
+        )
         for key, metric_type in metric_types
     ]
 
@@ -106,11 +113,16 @@ async def score_case(
     return results
 
 
-def build_judge(*, api_key: str, base_url: str | None = None):
-    """Build only the explicitly requested judge; never silently fall back."""
+def build_judge(
+    *,
+    api_key: str,
+    base_url: str | None = None,
+    config: RAGConfig = DEFAULT_RAG_CONFIG,
+):
+    """Build only the configured judge; never silently fall back."""
     from deepeval.models import OpenAIModel
 
-    return OpenAIModel(model=JUDGE_MODEL, api_key=api_key, base_url=base_url)
+    return OpenAIModel(model=config.judge_model, api_key=api_key, base_url=base_url)
 
 
 async def probe_judge(judge: Any) -> None:

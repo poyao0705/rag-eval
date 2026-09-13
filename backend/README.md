@@ -4,9 +4,9 @@
 
 `build_rag_graph` uses `langchain.agents.create_agent` with one retrieval tool.
 Invoke it with `{"question": "..."}`. Each successful invocation makes two
-`gpt-5-mini` requests: a required retrieval tool call with a model-selected
-search query, then an answer with tools disabled. The retriever remains fixed
-per graph and returns up to five passages.
+configured answer-model requests: a required retrieval tool call with a
+model-selected search query, then an answer with tools disabled. The retriever
+remains fixed per graph and returns up to configured `RAG_TOP_K` passages.
 
 The tool returns `Command(update=...)`, storing `retrieved_passages`,
 `retrieval_context`, `retrieval_count`, and a matching `ToolMessage` in agent
@@ -21,28 +21,44 @@ means one retrieval in a successful invocation, not crash-safe deduplication
 across caller retries. Providers must support required tool choice, disabling
 parallel calls, and the OpenAI Responses API.
 
+## RAG configuration
+
+Set RAG and evaluation knobs in `backend/.env`:
+
+```dotenv
+RAG_ANSWER_MODEL=gpt-5-mini
+RAG_TOP_K=10
+RAG_EVAL_JUDGE_MODEL=gpt-5.4
+RAG_EVAL_SEED=42
+RAG_EVAL_SAMPLE_SIZE=20
+RAG_EVAL_METRIC_THRESHOLD=0.5
+```
+
+These settings are built once per evaluation and passed to retrieval, answer
+model, cohort selection, scoring, and report metadata. `RAG_TOP_K` controls
+both the actual retrieval request and `results.json`; it is not report-only.
+Positive integers are required for `RAG_TOP_K` and `RAG_EVAL_SAMPLE_SIZE`;
+the metric threshold must be in `[0, 1]`.
+
 ## RAG evaluation
 
 The evaluation is offline by default. The paid harness is gated by
 `RUN_RAG_EVAL=1` and writes its report to `backend/.rag-eval/results.json`.
-It evaluates the same fixed 20-question validation cohort with each retriever
-sequentially (60 cases and five metrics per case).
+It evaluates the configured validation cohort with each retriever sequentially
+(default: 20 questions, 60 cases, and five metrics per case).
 
-Before a paid run, verify that the configured provider supports the exact
-judge model `gpt-5.4` and its structured-output interface. This explicitly
-pins DeepEval 4.2.2's recommended/default judge using its stock `OpenAIModel`,
-including native schema parsing; no model capability overrides are applied.
-Provider compatibility or availability failures are configuration blockers; the
-harness does not silently substitute another model. The existing BM25 index
-migration also requires explicit operator authorization. The generator uses
-`gpt-5-mini` and the configured OpenAI credentials. Do not put credentials in
-reports or command output.
+Before a paid run, verify that the configured provider supports
+`RAG_EVAL_JUDGE_MODEL` and its structured-output interface. The harness uses
+DeepEval's stock `OpenAIModel`, including native schema parsing, and does not
+silently substitute another model. Provider compatibility or availability
+failures are configuration blockers. The existing BM25 index migration also
+requires explicit operator authorization. Do not put credentials in reports or
+command output.
 
-The cohort uses seed 42 and a stable database hash, so it is repeatable when
-the eligible database contents are unchanged. This does not make LLM output
-deterministic. There is no fresh-cohort, random-seed CLI, or full-dataset
-mode. Retrieval searches the global materialized corpus rather than passages
-linked to each question.
+The cohort uses `RAG_EVAL_SEED` and a stable database hash, so it is repeatable
+when eligible database contents are unchanged. This does not make LLM output
+deterministic. Retrieval searches the global materialized corpus rather than
+passages linked to each question.
 
 HotpotQA answers are short gold answers. They are useful expected outputs but
 do not necessarily express every multi-hop supporting fact, so contextual

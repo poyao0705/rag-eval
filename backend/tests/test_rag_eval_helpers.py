@@ -21,34 +21,33 @@ from rag_eval.scoring import (
     score_case,
 )
 
+from backend.core.config import RAGConfig
+
 
 class CohortLoaderTests(unittest.IsolatedAsyncioTestCase):
     @staticmethod
     def _session(rows):
-        result = SimpleNamespace(
-            mappings=lambda: SimpleNamespace(all=lambda: rows)
-        )
+        result = SimpleNamespace(mappings=lambda: SimpleNamespace(all=lambda: rows))
         return SimpleNamespace(execute=AsyncMock(return_value=result))
 
-    async def test_cohort_query_is_fixed_and_labeled(self):
+    async def test_cohort_query_uses_configured_seed_and_size(self):
         rows = [
             dict(id=f"qa-{i}", question=f"Question {i}?", answer=f"Answer {i}")
-            for i in range(20)
+            for i in range(3)
         ]
         session = self._session(rows)
+        config = RAGConfig(evaluation_seed=9, evaluation_sample_size=3)
 
-        cohort = await load_cohort(cast(Any, session))
+        cohort = await load_cohort(cast(Any, session), config)
 
         statement, params = session.execute.await_args.args
         sql = str(statement)
         self.assertIn("q.split = 'VALIDATION'", sql)
-        self.assertIn(
-            "ORDER BY md5(CAST(:seed AS text) || ':' || q.id), q.id", sql
-        )
+        self.assertIn("ORDER BY md5(CAST(:seed AS text) || ':' || q.id), q.id", sql)
         self.assertNotIn("random()", sql.lower())
-        self.assertEqual(params, {"seed": 42, "sample_size": 20})
+        self.assertEqual(params, {"seed": 9, "sample_size": 3})
         self.assertEqual(cohort[0].answer, "Answer 0")
-        self.assertEqual(len(cohort), 20)
+        self.assertEqual(len(cohort), 3)
 
     async def test_rejects_incomplete_duplicate_and_blank_cohorts(self):
         valid_rows = [
@@ -165,7 +164,10 @@ class ReportTests(unittest.TestCase):
                 },
             ],
         )
-        report = new_report([qa])
+        config = RAGConfig(
+            answer_model="answer-model", judge_model="judge-model", top_k=10
+        )
+        report = new_report([qa], config)
         report["cases"].append(record)
 
         with TemporaryDirectory() as directory:
@@ -174,13 +176,15 @@ class ReportTests(unittest.TestCase):
             saved = json.loads(path.read_text(encoding="utf-8"))
 
         self.assertEqual(saved["seed"], 42)
-        self.assertEqual(saved["generator_model"], "gpt-5-mini")
-        self.assertEqual(saved["judge_model"], "gpt-5.4")
-        self.assertEqual(saved["top_k"], 5)
+        self.assertEqual(saved["generator_model"], "answer-model")
+        self.assertEqual(saved["judge_model"], "judge-model")
+        self.assertEqual(saved["top_k"], 10)
         self.assertEqual(saved["qa_ids"], ["qa-1"])
         self.assertEqual(saved["cases"][0]["passage_ids"], [str(UUID(int=7))])
         self.assertEqual(saved["cases"][0]["retrieval_context"], ["First", "Second"])
-        self.assertEqual(saved["cases"][0]["metrics"][1]["error"], {"type": "TimeoutError"})
+        self.assertEqual(
+            saved["cases"][0]["metrics"][1]["error"], {"type": "TimeoutError"}
+        )
         self.assertNotIn("CREDENTIAL_SENTINEL", json.dumps(saved))
         self.assertEqual(saved["summary"]["attempted_case_count"], 1)
         self.assertEqual(saved["summary"]["completed_case_count"], 1)
@@ -190,7 +194,9 @@ class HarnessTests(unittest.IsolatedAsyncioTestCase):
     async def test_run_cases_uses_fixed_order_and_question_only_inputs(self):
         from test_rag import run_cases
 
-        cohort = [QAExample(f"qa-{i}", f"Question {i}?", f"Answer {i}") for i in range(20)]
+        cohort = [
+            QAExample(f"qa-{i}", f"Question {i}?", f"Answer {i}") for i in range(20)
+        ]
         graphs = {
             name: SimpleNamespace(
                 ainvoke=AsyncMock(
@@ -236,7 +242,12 @@ class HarnessTests(unittest.IsolatedAsyncioTestCase):
             [qa.id for qa in cohort],
         )
         self.assertTrue(all(len(case["metrics"]) == 5 for case in report["cases"]))
-        self.assertTrue(all("Answer" not in str(graph.ainvoke.call_args) for graph in graphs.values()))
+        self.assertTrue(
+            all(
+                "Answer" not in str(graph.ainvoke.call_args)
+                for graph in graphs.values()
+            )
+        )
 
     async def test_run_cases_persists_partial_graph_failure(self):
         from test_rag import run_cases
@@ -266,10 +277,21 @@ class HarnessTests(unittest.IsolatedAsyncioTestCase):
         cohort = [QAExample("qa-1", "Question?", "Answer")]
         graph = SimpleNamespace(
             ainvoke=AsyncMock(
-                return_value={"answer": "A", "retrieval_context": [], "retrieved_passages": []}
+                return_value={
+                    "answer": "A",
+                    "retrieval_context": [],
+                    "retrieved_passages": [],
+                }
             )
         )
-        metric_error = [{"name": "faithfulness", "score": None, "reason": None, "error": {"type": "TimeoutError"}}]
+        metric_error = [
+            {
+                "name": "faithfulness",
+                "score": None,
+                "reason": None,
+                "error": {"type": "TimeoutError"},
+            }
+        ]
         with TemporaryDirectory() as directory:
             path = Path(directory) / "results.json"
             with (
@@ -295,6 +317,7 @@ class HarnessTests(unittest.IsolatedAsyncioTestCase):
         settings = SimpleNamespace(
             DATABASE_URL="postgresql+psycopg://db.example/rag",
             OPENAI_API_KEY=SimpleNamespace(get_secret_value=lambda: "configured-key"),
+            rag_config=RAGConfig(),
         )
         engine = SimpleNamespace(dispose=AsyncMock())
         session = SimpleNamespace(execute=AsyncMock())
@@ -308,25 +331,49 @@ class HarnessTests(unittest.IsolatedAsyncioTestCase):
         from test_rag import run_live_evaluation
 
         settings, engine, session, session_factory = self._live_resource_mocks()
+        settings.rag_config = RAGConfig(
+            answer_model="answer-model",
+            top_k=7,
+            judge_model="judge-model",
+            evaluation_seed=9,
+            evaluation_sample_size=3,
+            evaluation_metric_threshold=0.75,
+        )
         with TemporaryDirectory() as directory:
             with (
                 patch("test_rag.DEFAULT_REPORT_PATH", Path(directory) / "results.json"),
                 patch("backend.core.config.Settings", return_value=settings),
-                patch("sqlalchemy.ext.asyncio.create_async_engine", return_value=engine),
-                patch("sqlalchemy.ext.asyncio.async_sessionmaker", return_value=session_factory),
-                patch("test_rag._verify_bm25_index", new=AsyncMock(side_effect=RuntimeError("missing index"))),
+                patch(
+                    "sqlalchemy.ext.asyncio.create_async_engine", return_value=engine
+                ),
+                patch(
+                    "sqlalchemy.ext.asyncio.async_sessionmaker",
+                    return_value=session_factory,
+                ),
+                patch(
+                    "test_rag._verify_bm25_index",
+                    new=AsyncMock(side_effect=RuntimeError("missing index")),
+                ),
                 patch("test_rag.build_judge") as build_judge,
                 patch("openai.AsyncOpenAI") as async_openai,
             ):
                 with self.assertRaisesRegex(RuntimeError, "setup failed at database"):
                     await run_live_evaluation()
-            saved = json.loads((Path(directory) / "results.json").read_text(encoding="utf-8"))
+            saved = json.loads(
+                (Path(directory) / "results.json").read_text(encoding="utf-8")
+            )
 
         build_judge.assert_not_called()
         async_openai.assert_not_called()
         engine.dispose.assert_awaited_once()
         self.assertEqual(saved["qa_ids"], [])
-        self.assertEqual(saved["errors"], [{"stage": "database", "type": "RuntimeError"}])
+        self.assertEqual(saved["seed"], 9)
+        self.assertEqual(saved["generator_model"], "answer-model")
+        self.assertEqual(saved["judge_model"], "judge-model")
+        self.assertEqual(saved["top_k"], 7)
+        self.assertEqual(
+            saved["errors"], [{"stage": "database", "type": "RuntimeError"}]
+        )
         self.assertNotIn("missing index", json.dumps(saved))
 
     async def test_invalid_cohort_stops_before_paid_calls_and_cleans_engine(self):
@@ -337,16 +384,26 @@ class HarnessTests(unittest.IsolatedAsyncioTestCase):
             with (
                 patch("test_rag.DEFAULT_REPORT_PATH", Path(directory) / "results.json"),
                 patch("backend.core.config.Settings", return_value=settings),
-                patch("sqlalchemy.ext.asyncio.create_async_engine", return_value=engine),
-                patch("sqlalchemy.ext.asyncio.async_sessionmaker", return_value=session_factory),
+                patch(
+                    "sqlalchemy.ext.asyncio.create_async_engine", return_value=engine
+                ),
+                patch(
+                    "sqlalchemy.ext.asyncio.async_sessionmaker",
+                    return_value=session_factory,
+                ),
                 patch("test_rag._verify_bm25_index", new=AsyncMock()),
-                patch("test_rag.load_cohort", new=AsyncMock(side_effect=ValueError("invalid cohort"))),
+                patch(
+                    "test_rag.load_cohort",
+                    new=AsyncMock(side_effect=ValueError("invalid cohort")),
+                ),
                 patch("test_rag.build_judge") as build_judge,
                 patch("openai.AsyncOpenAI") as async_openai,
             ):
                 with self.assertRaisesRegex(RuntimeError, "setup failed at cohort"):
                     await run_live_evaluation()
-            saved = json.loads((Path(directory) / "results.json").read_text(encoding="utf-8"))
+            saved = json.loads(
+                (Path(directory) / "results.json").read_text(encoding="utf-8")
+            )
 
         build_judge.assert_not_called()
         async_openai.assert_not_called()
@@ -359,29 +416,67 @@ class HarnessTests(unittest.IsolatedAsyncioTestCase):
         from test_rag import run_live_evaluation
 
         settings, engine, session, session_factory = self._live_resource_mocks()
+        config = RAGConfig(
+            answer_model="answer-model",
+            top_k=10,
+            judge_model="judge-model",
+            evaluation_seed=9,
+            evaluation_sample_size=1,
+            evaluation_metric_threshold=0.75,
+        )
+        settings.rag_config = config
         client = SimpleNamespace()
         client_context = MagicMock()
         client_context.__aenter__ = AsyncMock(return_value=client)
         client_context.__aexit__ = AsyncMock(return_value=None)
         cohort = [QAExample("qa-1", "Question?", "Answer")]
+        judge = object()
+        model = object()
+        graph = object()
         with TemporaryDirectory() as directory:
             with (
                 patch("test_rag.DEFAULT_REPORT_PATH", Path(directory) / "results.json"),
                 patch("backend.core.config.Settings", return_value=settings),
-                patch("sqlalchemy.ext.asyncio.create_async_engine", return_value=engine),
-                patch("sqlalchemy.ext.asyncio.async_sessionmaker", return_value=session_factory),
+                patch(
+                    "sqlalchemy.ext.asyncio.create_async_engine", return_value=engine
+                ),
+                patch(
+                    "sqlalchemy.ext.asyncio.async_sessionmaker",
+                    return_value=session_factory,
+                ),
                 patch("test_rag._verify_bm25_index", new=AsyncMock()),
-                patch("test_rag.load_cohort", new=AsyncMock(return_value=cohort)),
-                patch("test_rag.build_judge", return_value=object()),
+                patch(
+                    "test_rag.load_cohort", new=AsyncMock(return_value=cohort)
+                ) as load_cohort,
+                patch("test_rag.build_judge", return_value=judge) as build_judge,
                 patch("test_rag.probe_judge", new=AsyncMock()),
                 patch("openai.AsyncOpenAI", return_value=client_context),
-                patch("test_rag.build_answer_model", return_value=object()),
-                patch("test_rag.build_rag_graph", return_value=object()),
-                patch("test_rag.run_cases", new=AsyncMock(side_effect=RuntimeError("case failure"))),
+                patch(
+                    "test_rag.build_answer_model", return_value=model
+                ) as build_answer_model,
+                patch(
+                    "test_rag.build_rag_graph", return_value=graph
+                ) as build_rag_graph,
+                patch(
+                    "test_rag.run_cases",
+                    new=AsyncMock(side_effect=RuntimeError("case failure")),
+                ) as run_cases,
             ):
                 with self.assertRaisesRegex(RuntimeError, "case failure"):
                     await run_live_evaluation()
 
+        load_cohort.assert_awaited_once_with(session, config)
+        build_judge.assert_called_once_with(
+            api_key="configured-key", base_url=None, config=config
+        )
+        build_answer_model.assert_called_once_with(client, config)
+        self.assertEqual(
+            [call.args[-1] for call in build_rag_graph.call_args_list], [config] * 3
+        )
+        await_args = run_cases.await_args
+        if await_args is None:
+            self.fail("run_cases was not awaited")
+        self.assertIs(await_args.args[-1], config)
         client_context.__aenter__.assert_awaited_once()
         client_context.__aexit__.assert_awaited_once()
         engine.dispose.assert_awaited_once()
@@ -435,6 +530,7 @@ class ScoringTests(unittest.IsolatedAsyncioTestCase):
 
     def test_build_metrics_uses_five_fresh_explicitly_configured_metrics(self):
         judge = object()
+        config = RAGConfig(evaluation_metric_threshold=0.75)
         with (
             patch("rag_eval.scoring.AnswerRelevancyMetric") as answer_relevancy,
             patch("rag_eval.scoring.FaithfulnessMetric") as faithfulness,
@@ -442,8 +538,8 @@ class ScoringTests(unittest.IsolatedAsyncioTestCase):
             patch("rag_eval.scoring.ContextualRecallMetric") as recall,
             patch("rag_eval.scoring.ContextualRelevancyMetric") as relevancy,
         ):
-            first = build_metrics(judge)
-            second = build_metrics(judge)
+            first = build_metrics(judge, config)
+            second = build_metrics(judge, config)
 
         self.assertEqual(
             [name for name, _metric in first],
@@ -464,13 +560,11 @@ class ScoringTests(unittest.IsolatedAsyncioTestCase):
         ):
             self.assertEqual(constructor.call_count, 2)
             constructor.assert_any_call(
-                model=judge, include_reason=True, threshold=0.5
+                model=judge, include_reason=True, threshold=0.75
             )
 
     async def test_low_score_and_metric_error_are_distinct(self):
-        low = SimpleNamespace(
-            a_measure=AsyncMock(), score=0.1, reason="Low relevance"
-        )
+        low = SimpleNamespace(a_measure=AsyncMock(), score=0.1, reason="Low relevance")
         broken = SimpleNamespace(
             a_measure=AsyncMock(side_effect=RuntimeError("secret"))
         )
@@ -485,8 +579,12 @@ class ScoringTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(results[1]["score"])
         self.assertEqual(results[1]["error"], {"type": "RuntimeError"})
         self.assertNotIn("secret", json.dumps(results))
-        self.assertTrue(all(set(result) == {"name", "score", "reason", "error"}
-                            for result in results))
+        self.assertTrue(
+            all(
+                set(result) == {"name", "score", "reason", "error"}
+                for result in results
+            )
+        )
 
     async def test_invalid_scores_and_empty_context_are_explicit_errors(self):
         invalid = SimpleNamespace(a_measure=AsyncMock(), score=float("nan"))
@@ -510,17 +608,26 @@ class ScoringTests(unittest.IsolatedAsyncioTestCase):
 
         qa = QAExample("qa-1", "Q", "A")
         case = build_test_case(
-            qa, {"question": "Q", "answer": "Actual", "retrieval_context": [], "messages": []}
+            qa,
+            {
+                "question": "Q",
+                "answer": "Actual",
+                "retrieval_context": [],
+                "messages": [],
+            },
         )
         self.assertEqual(case.retrieval_context, [])
 
-    def test_build_judge_uses_only_the_explicit_model(self):
+    def test_build_judge_uses_the_configured_model(self):
+        config = RAGConfig(judge_model="judge-model")
         with patch("deepeval.models.OpenAIModel") as constructor:
-            judge = build_judge(api_key="key", base_url="https://provider")
+            judge = build_judge(
+                api_key="key", base_url="https://provider", config=config
+            )
 
         self.assertIs(judge, constructor.return_value)
         constructor.assert_called_once_with(
-            model="gpt-5.4", api_key="key", base_url="https://provider"
+            model="judge-model", api_key="key", base_url="https://provider"
         )
 
     async def test_probe_rejects_unverified_structured_output_before_paid_call(self):
@@ -536,9 +643,7 @@ class ScoringTests(unittest.IsolatedAsyncioTestCase):
         )
         await probe_judge(good_judge)
         good_judge.a_generate.assert_awaited_once()
-        self.assertIs(
-            good_judge.a_generate.await_args.kwargs["schema"], JudgeProbe
-        )
+        self.assertIs(good_judge.a_generate.await_args.kwargs["schema"], JudgeProbe)
 
         bad_judge = SimpleNamespace(
             supports_structured_outputs=lambda: True,

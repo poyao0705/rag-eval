@@ -33,6 +33,7 @@ RAG_EVAL_JUDGE_MODEL=gpt-5.4
 RAG_EVAL_SEED=42
 RAG_EVAL_SAMPLE_SIZE=20
 RAG_EVAL_METRIC_THRESHOLD=0.5
+RAG_RERANK_MODEL=rerank-english-v3.0
 ```
 
 These settings are built once per evaluation and passed to retrieval, answer
@@ -42,6 +43,35 @@ final retrieval result count and `results.json`; it is not report-only.
 requests before fusion. Hybrid retrieval uses the larger of these two limits.
 Positive integers are required for `RAG_TOP_K`, `RAG_HYBRID_CANDIDATE_TOP_K`, and
 `RAG_EVAL_SAMPLE_SIZE`; the metric threshold must be in `[0, 1]`.
+
+## Hybrid reranking
+
+Each hybrid requests expanded lexical and vector candidates, fuses their full
+deduplicated pool with reciprocal-rank fusion, then sends that pool to the
+injected Cohere reranker before applying the final `RAG_TOP_K` limit. Fusion
+`scores` retain reciprocal-rank-fusion meaning; `relevance_score` is Cohere's
+reranking score, so the two score fields are not interchangeable.
+
+Both hybrid retrievers require the same injected reranker. Reranking failures
+propagate to the caller, and empty candidate pools do not call Cohere. The
+caller owns the `cohere.AsyncClientV2`, configures it with the secret value, and
+manages it using the installed SDK's verified async lifecycle (`async with`);
+this scope does not add a client owner or assume a `.close()` method.
+
+```python
+reranker = CohereReranker(client, model=settings.rag_config.rerank_model)
+bm25_hybrid = HybridBM25Retriever(
+    embedder, reranker=reranker,
+    candidate_top_k=settings.rag_config.hybrid_candidate_top_k,
+)
+tsvector_hybrid = HybridTSVectorRetriever(
+    embedder, reranker=reranker,
+    candidate_top_k=settings.rag_config.hybrid_candidate_top_k,
+)
+```
+
+The caller-owned client is a configured `cohere.AsyncClientV2` using
+`api_key=settings.COHERE_API_KEY.get_secret_value()`.
 
 ## RAG evaluation
 

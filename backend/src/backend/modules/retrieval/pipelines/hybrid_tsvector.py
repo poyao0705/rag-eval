@@ -11,6 +11,7 @@ from backend.modules.retrieval.contracts import (
 )
 from backend.modules.retrieval.pipelines.tsvector import TSVectorRetriever
 from backend.modules.retrieval.pipelines.vector import VectorRetriever
+from backend.modules.retrieval.reranking import CohereReranker
 from backend.modules.retrieval.utils import reciprocal_rank_fusion
 
 
@@ -23,6 +24,7 @@ class HybridTSVectorRetriever:
         self,
         embedder: QueryEmbedder,
         *,
+        reranker: CohereReranker,
         candidate_top_k: int = DEFAULT_RAG_CONFIG.hybrid_candidate_top_k,
     ) -> None:
         if (
@@ -32,6 +34,7 @@ class HybridTSVectorRetriever:
         ):
             raise ValueError("candidate_top_k must be a positive integer")
         self.candidate_top_k = candidate_top_k
+        self.reranker = reranker
         self.tsvector = TSVectorRetriever()
         self.vector = VectorRetriever(embedder)
 
@@ -46,6 +49,5 @@ class HybridTSVectorRetriever:
         )
         lexical = await self.tsvector.retrieve(candidate_request, session)
         vector = await self.vector.retrieve(candidate_request, session)
-        return reciprocal_rank_fusion(
-            [lexical, vector], retriever=self.name
-        )[: request.top_k]
+        fused = reciprocal_rank_fusion([lexical, vector], retriever=self.name)
+        return await self.reranker.rerank(request.query, fused, request.top_k)

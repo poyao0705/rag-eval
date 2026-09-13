@@ -148,6 +148,14 @@ backend/.rag-eval/results.json
 
 The report contains per-case results and aggregate metrics under `summary`.
 
+### RAG evaluation summary
+
+![RAG evaluation summary](docs/assets/rag-evaluation-summary.png)
+
+Snapshot generated from `backend/.rag-eval/results.json`. Regenerate it after
+new evaluations with the offline heatmap command documented in
+[`backend/README.md`](backend/README.md).
+
 ### HotpotQA passage sizing
 
 Measured from the `hotpotqa/hotpot_qa` dataset using the `distractor` configuration across the train and validation splits. A passage is one context document with its sentences joined together; word counts use whitespace splitting.

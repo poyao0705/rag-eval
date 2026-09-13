@@ -2,7 +2,6 @@ from langchain_openai import ChatOpenAI
 from openai import AsyncOpenAI
 from pydantic import SecretStr
 
-
 MODEL = "gpt-5-mini"
 INSTRUCTIONS = (
     "Search for evidence with the retrieve tool exactly once before answering. "

@@ -9,8 +9,7 @@ from numbers import Real
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from rag_eval.cohort import QAExample, SEED
-
+from rag_eval.cohort import SEED, QAExample
 
 GENERATOR_MODEL = "gpt-5-mini"
 JUDGE_MODEL = "gpt-5.4"
@@ -113,10 +112,7 @@ def _valid_score(score: Any) -> bool:
 def summarize(cases: list[dict[str, Any]]) -> dict[str, Any]:
     """Summarize successful scores and make every missing measurement visible."""
     totals: dict[str, dict[str, dict[str, Any]]] = {
-        retriever: {
-            metric: {"scores": [], "error_count": 0}
-            for metric in METRICS
-        }
+        retriever: {metric: {"scores": [], "error_count": 0} for metric in METRICS}
         for retriever in RETRIEVERS
     }
     attempted = len(cases)

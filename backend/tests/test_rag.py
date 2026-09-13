@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import os
 import unittest
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Mapping, cast
+from typing import Any, cast
 
 from rag_eval.cohort import QAExample, load_cohort
 from rag_eval.report import case_record, new_report, write_report

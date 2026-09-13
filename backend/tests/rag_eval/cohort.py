@@ -3,7 +3,6 @@ from dataclasses import dataclass
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-
 SEED = 42
 SAMPLE_SIZE = 20
 COHORT_SQL = """

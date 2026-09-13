@@ -41,7 +41,10 @@ def initialize(state: RAGState, runtime: Runtime) -> dict[str, Any]:
     if not isinstance(question, str) or not question.strip():
         raise ValueError("question must be a nonblank string")
     return {
-        "messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES), HumanMessage(content=question)],
+        "messages": [
+            RemoveMessage(id=REMOVE_ALL_MESSAGES),
+            HumanMessage(content=question),
+        ],
         "retrieved_passages": [],
         "retrieval_context": [],
         "retrieval_count": 0,
@@ -110,7 +113,9 @@ def build_rag_graph(
                 "retrieval_context": context,
                 "retrieval_count": 1,
                 "messages": [
-                    ToolMessage(content=json.dumps(context), tool_call_id=runtime.tool_call_id)
+                    ToolMessage(
+                        content=json.dumps(context), tool_call_id=runtime.tool_call_id
+                    )
                 ],
             }
         )

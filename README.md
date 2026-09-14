@@ -37,13 +37,15 @@ docker compose exec postgres \
 
 1. Go to the `backend` directory.
 2. Get `uv` if you don't have it already.
-3. Create a `.env` file with the database URL and OpenAI API key:
+3. Copy the environment template, then replace placeholder values with your
+   database URL and API keys:
 
-   ```env
-   DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/deep_agents_rag
-   OPENAI_API_KEY=sk-your-key
-   COHERE_API_KEY=your-cohere-key
+   ```bash
+   cp ../.env.example .env
    ```
+
+   Edit `.env` and set `DATABASE_URL`, `OPENAI_API_KEY`, and `COHERE_API_KEY`.
+   Optional RAG, evaluation, and LangSmith settings are included in the template.
 
 4. Install dependencies:
 

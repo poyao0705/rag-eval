@@ -56,7 +56,7 @@ class JudgeAdapterTests(unittest.IsolatedAsyncioTestCase):
             "id": "chatcmpl-offline",
             "object": "chat.completion",
             "created": 0,
-            "model": "gpt-5.4",
+            "model": "gpt-4.1",
             "choices": [{
                 "index": 0,
                 "message": {
@@ -75,12 +75,12 @@ class JudgeAdapterTests(unittest.IsolatedAsyncioTestCase):
         for request, name in zip(self.requests, schema_names, strict=True):
             body = json.loads(request.content)
             self.assertEqual(str(request.url), "https://judge.invalid/v1/chat/completions")
-            self.assertEqual(body["model"], "gpt-5.4")
+            self.assertEqual(body["model"], "gpt-4.1")
             self.assertEqual(body["response_format"]["type"], "json_schema")
             self.assertEqual(body["response_format"]["json_schema"]["name"], name)
             self.assertIs(body["response_format"]["json_schema"]["strict"], True)
-            # Stock DeepEval adjusts the temperature for its supported model.
-            self.assertEqual(body["temperature"], 1)
+            # Stock DeepEval selects gpt-4.1's zero-temperature default.
+            self.assertEqual(body["temperature"], 0.0)
 
     async def test_build_judge_probe_uses_supported_stock_model_and_native_parse(self):
         self._completion('{"ok": true}')

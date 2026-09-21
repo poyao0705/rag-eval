@@ -148,41 +148,43 @@ async def run_live_evaluation() -> dict[str, Any]:
 
             stage = "generator"
             generator_key = settings.OPENAI_API_KEY.get_secret_value()
-            async with AsyncOpenAI(api_key=generator_key, max_retries=0) as client:
+            async with (
+                AsyncOpenAI(api_key=generator_key, max_retries=0) as client,
+                AsyncClientV2(
+                    api_key=settings.COHERE_API_KEY.get_secret_value()
+                ) as cohere_client
+            ):
                 generator = build_answer_model(client, config)
                 stage = "reranker"
-                async with AsyncClientV2(
-                    api_key=settings.COHERE_API_KEY.get_secret_value()
-                ) as cohere_client:
-                    embedder = OpenAIQueryEmbedder(client)
-                    reranker = CohereReranker(cohere_client, model=config.rerank_model)
-                    graphs = {
-                        "bm25": build_rag_graph(
-                            BM25Retriever(), session, generator, config
+                embedder = OpenAIQueryEmbedder(client)
+                reranker = CohereReranker(cohere_client, model=config.rerank_model)
+                graphs = {
+                    "bm25": build_rag_graph(
+                        BM25Retriever(), session, generator, config
+                    ),
+                    "tsvector": build_rag_graph(
+                        TSVectorRetriever(), session, generator, config
+                    ),
+                    "vector": build_rag_graph(
+                        VectorRetriever(embedder), session, generator, config
+                    ),
+                    "hybrid_bm25": build_rag_graph(
+                        HybridBM25Retriever(
+                            embedder, reranker=reranker,
+                            candidate_top_k=config.hybrid_candidate_top_k,
                         ),
-                        "tsvector": build_rag_graph(
-                            TSVectorRetriever(), session, generator, config
+                        session, generator, config,
+                    ),
+                    "hybrid_tsvector": build_rag_graph(
+                        HybridTSVectorRetriever(
+                            embedder, reranker=reranker,
+                            candidate_top_k=config.hybrid_candidate_top_k,
                         ),
-                        "vector": build_rag_graph(
-                            VectorRetriever(embedder), session, generator, config
-                        ),
-                        "hybrid_bm25": build_rag_graph(
-                            HybridBM25Retriever(
-                                embedder, reranker=reranker,
-                                candidate_top_k=config.hybrid_candidate_top_k,
-                            ),
-                            session, generator, config,
-                        ),
-                        "hybrid_tsvector": build_rag_graph(
-                            HybridTSVectorRetriever(
-                                embedder, reranker=reranker,
-                                candidate_top_k=config.hybrid_candidate_top_k,
-                            ),
-                            session, generator, config,
-                        ),
-                    }
-                    stage = "evaluation"
-                    return await run_cases(cohort, graphs, judge, report_path, config)
+                        session, generator, config,
+                    ),
+                }
+                stage = "evaluation"
+                return await run_cases(cohort, graphs, judge, report_path, config)
     except Exception as error:
         if stage == "evaluation":
             raise

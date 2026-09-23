@@ -9,7 +9,6 @@ from sqlalchemy import select, update
 
 from backend.db.models import SourcePassage
 from backend.modules.retrieval.embeddings import (
-    EMBEDDING_DIMENSIONS,
     EMBEDDING_MODEL,
     validated_embeddings,
 )

@@ -172,6 +172,7 @@ dependencies = [
     { name = "python-dotenv" },
     { name = "sqlalchemy", extra = ["asyncio"] },
     { name = "sqlmodel" },
+    { name = "typesafe-sdk" },
 ]
 
 [package.dev-dependencies]
@@ -200,6 +201,7 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.2.3" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.52" },
     { name = "sqlmodel", specifier = ">=0.0.42" },
+    { name = "typesafe-sdk", specifier = ">=0.7.1" },
 ]
 
 [package.metadata.requires-dev]
@@ -2647,6 +2649,22 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/c0/18/4c2c0290953f8b3b9612adfcb07b57f144ade3ad32a76764fca42b77c5f3/types_requests-2.33.0.20260906.tar.gz", hash = "sha256:76ab8a0fb736744a0c3deee7aa57b2927e301f078d9e61f5391b3e92002416b9", size = 25263, upload-time = "2026-09-06T06:35:47.707Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/60/4c/51ec821d22a45b4162fa3f3e9e94ea4c0f8c49e82363b10955baa5438391/types_requests-2.33.0.20260906-py3-none-any.whl", hash = "sha256:9f53622652bd921ead7a54d665be1b8d518165c8b51cc9d68d944cd6b6bfa8fb", size = 21461, upload-time = "2026-09-06T06:35:45.856Z" },
+]
+
+[[package]]
+name = "typesafe-sdk"
+version = "0.7.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "httpx2" },
+    { name = "pydantic" },
+    { name = "pydantic-core" },
+    { name = "tenacity" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/dc/d4/14d9a00c759c126c814f7cfc0b2a760768214cda0708a9af49577b321ee3/typesafe_sdk-0.7.1.tar.gz", hash = "sha256:495ce9d81733b4f95edcb156e95042a7ec4bfd59972a1150ffa8ce1e11f85a54", size = 23062, upload-time = "2026-09-21T15:57:53.579Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/75/72/7e57648d27e45260b04762dd2393a81604b516a282fc5efe94cdf90ab971/typesafe_sdk-0.7.1-py3-none-any.whl", hash = "sha256:9d04eee13b5f64bbbe6f8e96cf40e3f39ca4efc934a1f4f39490cb9a43e9d2ad", size = 36366, upload-time = "2026-09-21T15:57:52.314Z" },
 ]
 
 [[package]]

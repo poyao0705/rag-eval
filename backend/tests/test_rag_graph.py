@@ -5,6 +5,7 @@ from typing import Any, cast
 from unittest.mock import AsyncMock
 from uuid import UUID
 
+from langchain_core.exceptions import ModelConnectionError
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.utils.function_calling import convert_to_openai_tool
@@ -17,6 +18,7 @@ from backend.modules.retrieval.contracts import RetrievedPassage
 
 class ScriptedModel(FakeMessagesListChatModel):
     requests: list[dict[str, Any]] = Field(default_factory=list)
+    errors: list[Exception] = Field(default_factory=list)
 
     def bind_tools(self, tools, *, tool_choice=None, **kwargs):
         return self.bind(
@@ -27,6 +29,8 @@ class ScriptedModel(FakeMessagesListChatModel):
 
     def _generate(self, messages, stop=None, run_manager=None, **kwargs):
         self.requests.append({"messages": list(messages), **kwargs})
+        if self.errors:
+            raise self.errors.pop(0)
         return super()._generate(messages, stop, run_manager, **kwargs)
 
 
@@ -67,6 +71,33 @@ class RAGGraphTests(unittest.IsolatedAsyncioTestCase):
                 schema = model.requests[0]["tools"][0]["function"]["parameters"]
                 self.assertEqual(schema.get("properties", {}), {})
                 self.assertEqual(schema.get("required", []), [])
+
+    async def test_model_retries_transient_provider_failure(self):
+        model = ScriptedModel(
+            responses=[AIMessage(content="Answer")],
+            errors=[ModelConnectionError("temporarily unavailable")],
+        )
+        graph, _, _ = build_graph(model)
+
+        state = await graph.ainvoke({"question": "Q?"})
+
+        self.assertEqual(state["answer"], "Answer")
+        self.assertEqual(len(model.requests), 2)
+        self.assertEqual(
+            model.requests[0]["messages"], model.requests[1]["messages"]
+        )
+
+    async def test_model_does_not_retry_nontransient_failure(self):
+        model = ScriptedModel(
+            responses=[AIMessage(content="unused")],
+            errors=[ValueError("invalid request")],
+        )
+        graph, _, _ = build_graph(model)
+
+        with self.assertRaisesRegex(ValueError, "invalid request"):
+            await graph.ainvoke({"question": "Q?"})
+
+        self.assertEqual(len(model.requests), 1)
 
     async def test_zero_retrieval_calls_are_allowed(self):
         model = ScriptedModel(responses=[AIMessage(content="Insufficient evidence.")])

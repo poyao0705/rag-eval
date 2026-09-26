@@ -3,11 +3,18 @@ from typing import Any, NotRequired, cast
 
 from langchain.agents import AgentState, create_agent
 from langchain.agents.middleware import (
+    ModelRetryMiddleware,
     ToolCallLimitMiddleware,
     after_agent,
     before_agent,
 )
 from langchain.tools import ToolRuntime, tool
+from langchain_core.exceptions import (
+    ModelAPIError,
+    ModelConnectionError,
+    ModelRateLimitError,
+    ModelTimeoutError,
+)
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage, ToolMessage
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
@@ -101,6 +108,22 @@ def build_rag_graph(
         state_schema=RAGState,
         middleware=[
             initialize,
+            cast(
+                Any,
+                ModelRetryMiddleware(
+                    max_retries=2,
+                    retry_on=(
+                        ModelAPIError,
+                        ModelConnectionError,
+                        ModelRateLimitError,
+                        ModelTimeoutError,
+                    ),
+                    initial_delay=1.0,
+                    backoff_factor=2.0,
+                    jitter=True,
+                    on_failure="error",
+                ),
+            ),
             # create_agent merges middleware state schemas at runtime.
             cast(
                 Any,

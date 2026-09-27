@@ -9,10 +9,13 @@ from __future__ import annotations
 import os
 import unittest
 from collections.abc import Mapping
+from datetime import datetime, timezone
 from importlib import import_module
 from pathlib import Path
+from time import perf_counter
 from typing import Any, cast
 
+from rag_eval import EVAL_MODE_BY_FLAG, EvalMode
 from rag_eval.cohort import QAExample, load_cohort
 from rag_eval.report import case_record, new_report, write_report
 from rag_eval.scoring import (
@@ -36,6 +39,25 @@ from backend.modules.retrieval.pipelines.vector import VectorRetriever
 from backend.modules.retrieval.reranking import CohereReranker
 
 DEFAULT_REPORT_PATH = Path(__file__).resolve().parents[1] / ".rag-eval" / "results.json"
+
+
+def _eval_mode() -> EvalMode:
+    value = os.environ.get("RUN_RAG_EVAL_MODE", "0")
+    if value not in EVAL_MODE_BY_FLAG:
+        raise ValueError("RUN_RAG_EVAL_MODE must be 0, 1, or 2")
+    return EVAL_MODE_BY_FLAG[value]
+
+
+def _new_run_report_path(eval_mode: EvalMode) -> Path:
+    """Reserve a dated run directory without replacing a previous result."""
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S.%fZ")
+    parent = DEFAULT_REPORT_PATH.parent
+    parent.mkdir(parents=True, exist_ok=True)
+    folder = parent / f"{stamp}-{eval_mode}"
+    folder.mkdir()
+    return folder / "results.json"
+
+
 BM25_INDEX_PREFLIGHT = text(
     """
     SELECT 1
@@ -70,27 +92,48 @@ async def run_cases(
     judge: Any,
     report_path: Path,
     config: RAGConfig = DEFAULT_RAG_CONFIG,
+    *,
+    eval_mode: EvalMode = "llm",
 ) -> dict[str, Any]:
     """Validate report names, then run in insertion order and persist each case."""
-    report = new_report(cohort, config, retriever_names=tuple(graphs))
+    report = new_report(
+        cohort, config, retriever_names=tuple(graphs), judge_eval_mode=eval_mode
+    )
+    evaluation_start = perf_counter()
     write_report(report_path, report)
     for name, graph in graphs.items():
         for qa in cohort:
+            case_start = perf_counter()
             state: Mapping[str, Any] | None = None
             try:
                 state = await graph.ainvoke({"question": qa.question})
                 case = build_test_case(qa, cast(Any, state))
-                scores = await score_case(case, build_metrics(judge, config))
-            except Exception as error:
-                report["cases"].append(
-                    case_record(qa, name, state, [], {"type": type(error).__name__})
+                scores = await score_case(
+                    case, build_metrics(judge, config, eval_mode=eval_mode)
                 )
+            except Exception as error:
+                duration = perf_counter() - case_start
+                report["cases"].append(
+                    case_record(
+                        qa,
+                        name,
+                        state,
+                        [],
+                        {"type": type(error).__name__},
+                        run_time_seconds=duration,
+                    )
+                )
+                report["total_run_time_seconds"] = perf_counter() - evaluation_start
                 write_report(report_path, report)
                 raise RuntimeError(
                     f"RAG case failed: {name}/{qa.id}; see report"
                 ) from None
 
-            report["cases"].append(case_record(qa, name, state, scores))
+            duration = perf_counter() - case_start
+            report["cases"].append(
+                case_record(qa, name, state, scores, run_time_seconds=duration)
+            )
+            report["total_run_time_seconds"] = perf_counter() - evaluation_start
             write_report(report_path, report)
             if any(item.get("error") is not None for item in scores):
                 raise RuntimeError(f"RAG scoring failed: {name}/{qa.id}; see report")
@@ -103,10 +146,10 @@ async def _verify_bm25_index(session: Any) -> None:
         raise RuntimeError("required BM25 index is missing or invalid")
 
 
-async def run_live_evaluation() -> dict[str, Any]:
+async def run_live_evaluation(report_path: Path) -> dict[str, Any]:
     """Own live resources and execute the explicitly authorized benchmark."""
-    report_path = DEFAULT_REPORT_PATH
-    report = new_report([], DEFAULT_RAG_CONFIG)
+    eval_mode = _eval_mode()
+    report = new_report([], DEFAULT_RAG_CONFIG, judge_eval_mode=eval_mode)
     write_report(report_path, report)
     engine = None
     stage = "settings"
@@ -121,7 +164,7 @@ async def run_live_evaluation() -> dict[str, Any]:
 
         settings = Settings()  # pyright: ignore[reportCallIssue]
         config = settings.rag_config
-        report = new_report([], config)
+        report = new_report([], config, judge_eval_mode=eval_mode)
         write_report(report_path, report)
         engine = create_async_engine(str(settings.DATABASE_URL))
         session_factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -131,20 +174,24 @@ async def run_live_evaluation() -> dict[str, Any]:
             await _verify_bm25_index(session)
             stage = "cohort"
             cohort = await load_cohort(session, config)
-            report = new_report(cohort, config)
+            report = new_report(cohort, config, judge_eval_mode=eval_mode)
             write_report(report_path, report)
 
             stage = "judge_construction"
-            judge_key = os.environ.get("RAG_JUDGE_API_KEY")
-            if not judge_key:
-                judge_key = settings.OPENAI_API_KEY.get_secret_value()
-            judge = build_judge(
-                api_key=judge_key,
-                base_url=os.environ.get("RAG_JUDGE_BASE_URL"),
-                config=config,
-            )
-            stage = "judge_probe"
-            await probe_judge(judge)
+            judge = None
+            if eval_mode == "system_one":
+                build_metrics(None, config, eval_mode=eval_mode)
+            else:
+                judge_key = os.environ.get("RAG_JUDGE_API_KEY")
+                if not judge_key:
+                    judge_key = settings.OPENAI_API_KEY.get_secret_value()
+                judge = build_judge(
+                    api_key=judge_key,
+                    base_url=os.environ.get("RAG_JUDGE_BASE_URL"),
+                    config=config,
+                )
+                stage = "judge_probe"
+                await probe_judge(judge)
 
             stage = "generator"
             generator_key = settings.OPENAI_API_KEY.get_secret_value()
@@ -168,21 +215,29 @@ async def run_live_evaluation() -> dict[str, Any]:
                         ),
                         "hybrid_bm25": build_rag_graph(
                             HybridBM25Retriever(
-                                embedder, reranker=reranker,
+                                embedder,
+                                reranker=reranker,
                                 candidate_top_k=config.hybrid_candidate_top_k,
                             ),
-                            session, generator, config,
+                            session,
+                            generator,
+                            config,
                         ),
                         "hybrid_tsvector": build_rag_graph(
                             HybridTSVectorRetriever(
-                                embedder, reranker=reranker,
+                                embedder,
+                                reranker=reranker,
                                 candidate_top_k=config.hybrid_candidate_top_k,
                             ),
-                            session, generator, config,
+                            session,
+                            generator,
+                            config,
                         ),
                     }
                     stage = "evaluation"
-                    return await run_cases(cohort, graphs, judge, report_path, config)
+                    return await run_cases(
+                        cohort, graphs, judge, report_path, config, eval_mode=eval_mode
+                    )
     except Exception as error:
         if stage == "evaluation":
             raise
@@ -200,10 +255,11 @@ async def run_live_evaluation() -> dict[str, Any]:
 )
 class TestRAGEvaluation(unittest.IsolatedAsyncioTestCase):
     async def test_live_evaluation(self) -> None:
-        await run_live_evaluation()
+        report_path = _new_run_report_path(_eval_mode())
+        await run_live_evaluation(report_path)
         render_report = import_module("rag_eval.visualize").render_report
 
-        render_report(DEFAULT_REPORT_PATH)
+        render_report(report_path)
 
 
 if __name__ == "__main__":

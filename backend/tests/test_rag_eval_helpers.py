@@ -3,6 +3,7 @@ import os
 import subprocess
 import sys
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -32,7 +33,7 @@ class CohortLoaderTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_cohort_query_uses_configured_seed_and_size(self):
         rows = [
-            dict(id=f"qa-{i}", question=f"Question {i}?", answer=f"Answer {i}")
+            {"id": f"qa-{i}", "question": f"Question {i}?", "answer": f"Answer {i}"}
             for i in range(3)
         ]
         session = self._session(rows)
@@ -51,7 +52,7 @@ class CohortLoaderTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_rejects_incomplete_duplicate_and_blank_cohorts(self):
         valid_rows = [
-            dict(id=f"qa-{i}", question=f"Question {i}?", answer=f"Answer {i}")
+            {"id": f"qa-{i}", "question": f"Question {i}?", "answer": f"Answer {i}"}
             for i in range(20)
         ]
         cases = [
@@ -61,13 +62,12 @@ class CohortLoaderTests(unittest.IsolatedAsyncioTestCase):
         ]
 
         for rows in cases:
-            with self.subTest(rows=rows):
-                with self.assertRaises(ValueError):
-                    await load_cohort(cast(Any, self._session(rows)))
+            with self.subTest(rows=rows), self.assertRaises(ValueError):
+                await load_cohort(cast(Any, self._session(rows)))
 
     async def test_loader_is_repeatable_and_preserves_answer_whitespace(self):
         rows = [
-            dict(id=f"qa-{i}", question=f"Question {i}?", answer=f"Answer {i}")
+            {"id": f"qa-{i}", "question": f"Question {i}?", "answer": f"Answer {i}"}
             for i in range(20)
         ]
         rows[0]["answer"] = "  Answer 0  "
@@ -84,10 +84,18 @@ class CohortLoaderTests(unittest.IsolatedAsyncioTestCase):
     def test_qa_example_is_immutable(self):
         example = QAExample("qa-1", "Question?", "Answer")
         with self.assertRaises((AttributeError, TypeError)):
-            setattr(example, "answer", "Changed")
+            cast(Any, example).answer = "Changed"
 
 
 class ReportTests(unittest.TestCase):
+    def test_system_one_report_does_not_claim_an_openai_judge(self):
+        report = new_report(
+            [], RAGConfig(judge_model="configured-openai"),
+            judge_eval_mode="system_one",
+        )
+        self.assertIsNone(report["judge_model"])
+        self.assertEqual(report["judge_eval_mode"], "system_one")
+
     def test_summarize_keeps_failed_measurements_out_of_the_mean(self):
         cases = [
             {
@@ -126,13 +134,13 @@ class ReportTests(unittest.TestCase):
             {"mean": None, "scored_count": 0, "error_count": 1},
         )
         self.assertEqual(
-            {
+            (
                 summary["attempted_case_count"],
                 summary["completed_case_count"],
                 summary["failed_case_count"],
                 summary["expected_case_count"],
-            },
-            {2, 2, 0, 60},
+            ),
+            (2, 2, 0, 60),
         )
 
     def test_report_rejects_reserved_retriever_names(self):
@@ -142,13 +150,12 @@ class ReportTests(unittest.TestCase):
         ):
             cases = [{"retriever": name, "metrics": [], "error": None}]
             for operation in (
-                lambda: new_report([], retriever_names=(name,)),
-                lambda: summarize([], retriever_names=(name,)),
-                lambda: summarize(cases),
+                lambda name=name: new_report([], retriever_names=(name,)),
+                lambda name=name: summarize([], retriever_names=(name,)),
+                lambda cases=cases: summarize(cases),
             ):
-                with self.subTest(name=name, operation=operation):
-                    with self.assertRaisesRegex(ValueError, "reserved"):
-                        operation()
+                with self.subTest(name=name, operation=operation), self.assertRaisesRegex(ValueError, "reserved"):
+                    operation()
 
         names = ("expected_case_count_custom", "retrievers", "summary")
         report = new_report([], retriever_names=names)
@@ -227,6 +234,65 @@ class ReportTests(unittest.TestCase):
 
 
 class HarnessTests(unittest.IsolatedAsyncioTestCase):
+    def test_shared_mode_mapping_covers_cli_values(self):
+        from rag_eval import EVAL_MODE_BY_FLAG, EvalMode
+
+        mode: EvalMode = EVAL_MODE_BY_FLAG["2"]
+        self.assertEqual(mode, "system_one")
+        self.assertEqual(EVAL_MODE_BY_FLAG, {"0": "llm", "1": "hybrid", "2": "system_one"})
+
+    def test_eval_mode_flag_defaults_and_rejects_invalid_values(self):
+        from test_rag import _eval_mode
+
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(_eval_mode(), "llm")
+        for value, expected in (("0", "llm"), ("1", "hybrid"), ("2", "system_one")):
+            with self.subTest(value=value), patch.dict(
+                os.environ, {"RUN_RAG_EVAL_MODE": value, "RUN_RAG_EVAL_HYBRID": "1"},
+                clear=True,
+            ):
+                self.assertEqual(_eval_mode(), expected)
+        with (
+            patch.dict(os.environ, {"RUN_RAG_EVAL_MODE": "3"}, clear=True),
+            self.assertRaisesRegex(ValueError, "RUN_RAG_EVAL_MODE"),
+        ):
+            _eval_mode()
+
+    def test_run_report_paths_keep_previous_results_and_reject_collisions(self):
+        from test_rag import _new_run_report_path
+
+        with TemporaryDirectory() as directory:
+            old_report = Path(directory) / "results.json"
+            old_report.write_text("old result", encoding="utf-8")
+            with (
+                patch("test_rag.DEFAULT_REPORT_PATH", old_report),
+                patch("test_rag.datetime") as clock,
+            ):
+                clock.now.return_value = datetime(
+                    2026, 9, 27, 10, 34, 3, 895449, tzinfo=timezone.utc
+                )
+                hybrid = _new_run_report_path("hybrid")
+                self.assertEqual(
+                    hybrid,
+                    Path(directory) / "2026-09-27T10-34-03.895449Z-hybrid" / "results.json",
+                )
+                hybrid.write_text("hybrid result", encoding="utf-8")
+                with self.assertRaises(FileExistsError):
+                    _new_run_report_path("hybrid")
+                llm = _new_run_report_path("llm")
+                llm.write_text("llm result", encoding="utf-8")
+                self.assertEqual(
+                    llm,
+                    Path(directory) / "2026-09-27T10-34-03.895449Z-llm" / "results.json",
+                )
+                self.assertEqual(old_report.read_text(encoding="utf-8"), "old result")
+                self.assertEqual(hybrid.read_text(encoding="utf-8"), "hybrid result")
+                system_one = _new_run_report_path("system_one")
+                self.assertEqual(
+                    system_one,
+                    Path(directory) / "2026-09-27T10-34-03.895449Z-system_one" / "results.json",
+                )
+
     async def test_run_cases_uses_fixed_order_and_question_only_inputs(self):
         from test_rag import run_cases
 
@@ -256,18 +322,15 @@ class HarnessTests(unittest.IsolatedAsyncioTestCase):
                 "contextual_relevancy",
             )
         ]
-        with TemporaryDirectory() as directory:
-            with (
-                patch("test_rag.build_test_case", return_value=object()),
-                patch("test_rag.build_metrics", return_value=[]),
-                patch("test_rag.score_case", new=AsyncMock(return_value=scores)),
-            ):
-                report = await run_cases(
-                    cohort,
-                    graphs,
-                    object(),
-                    Path(directory) / "results.json",
-                )
+        with (
+            TemporaryDirectory() as directory,
+            patch("test_rag.build_test_case", return_value=object()),
+            patch("test_rag.build_metrics", return_value=[]),
+            patch("test_rag.score_case", new=AsyncMock(return_value=scores)),
+        ):
+            report = await run_cases(
+                cohort, graphs, object(), Path(directory) / "results.json"
+            )
 
         expected_calls = [call({"question": qa.question}) for qa in cohort]
         for graph in graphs.values():
@@ -336,6 +399,48 @@ class HarnessTests(unittest.IsolatedAsyncioTestCase):
                     for name in lineup:
                         self.assertIn(name, report["summary"])
 
+    async def test_run_cases_records_full_case_and_total_wall_time(self):
+        from test_rag import run_cases
+
+        clock = [0.0]
+
+        async def invoke(_state):
+            clock[0] += 1.0
+            return {"answer": "A", "retrieval_context": []}
+
+        async def score(_case, _metrics):
+            clock[0] += 2.0
+            return []
+
+        def persist(path, report):
+            clock[0] += 0.5
+            write_report(path, report)
+
+        cohort = [QAExample("qa-1", "Q1", "A"), QAExample("qa-2", "Q2", "A")]
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "results.json"
+            with (
+                patch("test_rag.perf_counter", side_effect=lambda: clock[0]),
+                patch("test_rag.write_report", side_effect=persist),
+                patch("test_rag.build_metrics", return_value=[]) as build_metrics,
+                patch("test_rag.score_case", side_effect=score),
+            ):
+                await run_cases(
+                    cohort, {"bm25": SimpleNamespace(ainvoke=invoke)}, object(), path,
+                    eval_mode="hybrid",
+                )
+            self.assertEqual(build_metrics.call_count, 2)
+            self.assertTrue(all(
+                entry.kwargs == {"eval_mode": "hybrid"}
+                for entry in build_metrics.call_args_list
+            ))
+            saved = json.loads(path.read_text(encoding="utf-8"))
+
+        self.assertEqual([case["run_time_seconds"] for case in saved["cases"]], [3.0, 3.0])
+        self.assertEqual(saved["total_run_time_seconds"], 7.0)
+        self.assertEqual(saved["summary"]["avg_run_time_seconds"], 3.0)
+        self.assertEqual(saved["judge_eval_mode"], "hybrid")
+
     async def test_run_cases_rejects_reserved_names_before_execution(self):
         from test_rag import run_cases
 
@@ -373,6 +478,10 @@ class HarnessTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(saved["cases"]), 1)
         self.assertEqual(saved["cases"][0]["error"], {"type": "RuntimeError"})
+        self.assertIsInstance(saved["cases"][0]["run_time_seconds"], float)
+        self.assertGreaterEqual(saved["cases"][0]["run_time_seconds"], 0)
+        self.assertIsNotNone(saved["summary"]["avg_run_time_seconds"])
+        self.assertGreaterEqual(saved["total_run_time_seconds"], 0)
         self.assertEqual(untouched.ainvoke.await_count, 0)
         self.assertEqual(saved["retrievers"], ["bm25", "tsvector", "vector"])
         self.assertEqual(saved["expected_case_count"], 3)
@@ -407,14 +516,14 @@ class HarnessTests(unittest.IsolatedAsyncioTestCase):
                 patch("test_rag.build_test_case", return_value=object()),
                 patch("test_rag.build_metrics", return_value=[]),
                 patch("test_rag.score_case", new=AsyncMock(return_value=metric_error)),
+                self.assertRaisesRegex(RuntimeError, "scoring failed"),
             ):
-                with self.assertRaisesRegex(RuntimeError, "scoring failed"):
-                    await run_cases(
-                        cohort,
-                        {"bm25": graph, "tsvector": graph, "vector": graph},
-                        object(),
-                        path,
-                    )
+                await run_cases(
+                    cohort,
+                    {"bm25": graph, "tsvector": graph, "vector": graph},
+                    object(),
+                    path,
+                )
             saved = json.loads(path.read_text(encoding="utf-8"))
 
         self.assertEqual(saved["cases"][0]["metrics"], metric_error)
@@ -452,8 +561,9 @@ class HarnessTests(unittest.IsolatedAsyncioTestCase):
             evaluation_metric_threshold=0.75,
         )
         with TemporaryDirectory() as directory:
+            report_path = Path(directory) / "results.json"
             with (
-                patch("test_rag.DEFAULT_REPORT_PATH", Path(directory) / "results.json"),
+                patch.dict(os.environ, {"RUN_RAG_EVAL_MODE": "0"}),
                 patch("backend.core.config.Settings", return_value=settings),
                 patch(
                     "sqlalchemy.ext.asyncio.create_async_engine", return_value=engine
@@ -469,12 +579,10 @@ class HarnessTests(unittest.IsolatedAsyncioTestCase):
                 patch("test_rag.build_judge") as build_judge,
                 patch("openai.AsyncOpenAI") as async_openai,
                 patch("cohere.AsyncClientV2") as async_cohere,
+                self.assertRaisesRegex(RuntimeError, "setup failed at database"),
             ):
-                with self.assertRaisesRegex(RuntimeError, "setup failed at database"):
-                    await run_live_evaluation()
-            saved = json.loads(
-                (Path(directory) / "results.json").read_text(encoding="utf-8")
-            )
+                await run_live_evaluation(report_path)
+            saved = json.loads(report_path.read_text(encoding="utf-8"))
 
         build_judge.assert_not_called()
         async_openai.assert_not_called()
@@ -497,8 +605,8 @@ class HarnessTests(unittest.IsolatedAsyncioTestCase):
 
         settings, engine, session, session_factory = self._live_resource_mocks()
         with TemporaryDirectory() as directory:
+            report_path = Path(directory) / "results.json"
             with (
-                patch("test_rag.DEFAULT_REPORT_PATH", Path(directory) / "results.json"),
                 patch("backend.core.config.Settings", return_value=settings),
                 patch(
                     "sqlalchemy.ext.asyncio.create_async_engine", return_value=engine
@@ -515,12 +623,10 @@ class HarnessTests(unittest.IsolatedAsyncioTestCase):
                 patch("test_rag.build_judge") as build_judge,
                 patch("openai.AsyncOpenAI") as async_openai,
                 patch("cohere.AsyncClientV2") as async_cohere,
+                self.assertRaisesRegex(RuntimeError, "setup failed at cohort"),
             ):
-                with self.assertRaisesRegex(RuntimeError, "setup failed at cohort"):
-                    await run_live_evaluation()
-            saved = json.loads(
-                (Path(directory) / "results.json").read_text(encoding="utf-8")
-            )
+                await run_live_evaluation(report_path)
+            saved = json.loads(report_path.read_text(encoding="utf-8"))
 
         build_judge.assert_not_called()
         async_openai.assert_not_called()
@@ -538,10 +644,19 @@ class HarnessTests(unittest.IsolatedAsyncioTestCase):
     async def test_evaluation_success_closes_clients_and_returns_report(self):
         await self._check_live_resources("success")
 
+    async def test_hybrid_flag_selects_hybrid_mode(self):
+        await self._check_live_resources("success", mode="1")
+
+    async def test_system_one_skips_the_llm_judge(self):
+        await self._check_live_resources("success", mode="2")
+
+    async def test_missing_system_one_model_stops_before_generation(self):
+        await self._check_live_resources("typesafe_failure", mode="2")
+
     async def test_cohere_entry_failure_is_sanitized_and_cleans_resources(self):
         await self._check_live_resources("cohere_entry_failure")
 
-    async def _check_live_resources(self, outcome):
+    async def _check_live_resources(self, outcome, mode="0"):
         from test_rag import run_live_evaluation
 
         settings, engine, session, session_factory = self._live_resource_mocks()
@@ -572,8 +687,9 @@ class HarnessTests(unittest.IsolatedAsyncioTestCase):
         model = object()
         graph = object()
         with TemporaryDirectory() as directory:
+            report_path = Path(directory) / "results.json"
             with (
-                patch("test_rag.DEFAULT_REPORT_PATH", Path(directory) / "results.json"),
+                patch.dict(os.environ, {"RUN_RAG_EVAL_MODE": mode}),
                 patch("backend.core.config.Settings", return_value=settings),
                 patch(
                     "sqlalchemy.ext.asyncio.create_async_engine", return_value=engine
@@ -587,7 +703,13 @@ class HarnessTests(unittest.IsolatedAsyncioTestCase):
                     "test_rag.load_cohort", new=AsyncMock(return_value=cohort)
                 ) as load_cohort,
                 patch("test_rag.build_judge", return_value=judge) as build_judge,
-                patch("test_rag.probe_judge", new=AsyncMock()),
+                patch("test_rag.probe_judge", new=AsyncMock()) as probe_judge,
+                patch(
+                    "test_rag.build_metrics",
+                    side_effect=(
+                        RuntimeError("secret") if outcome == "typesafe_failure" else None
+                    ),
+                ) as preflight,
                 patch("openai.AsyncOpenAI", return_value=client_context) as async_openai,
                 patch("cohere.AsyncClientV2", return_value=cohere_context) as async_cohere,
                 patch(
@@ -606,20 +728,41 @@ class HarnessTests(unittest.IsolatedAsyncioTestCase):
                 ) as run_cases,
             ):
                 if outcome == "success":
-                    self.assertIs(await run_live_evaluation(), sentinel_report)
+                    self.assertIs(await run_live_evaluation(report_path), sentinel_report)
                 else:
-                    message = (
-                        "case failure" if outcome == "evaluation_failure"
-                        else "setup failed at reranker"
-                    )
+                    message = {
+                        "evaluation_failure": "case failure",
+                        "typesafe_failure": "setup failed at judge_construction",
+                        "cohere_entry_failure": "setup failed at reranker",
+                    }[outcome]
                     with self.assertRaisesRegex(RuntimeError, message):
-                        await run_live_evaluation()
-            saved = json.loads((Path(directory) / "results.json").read_text())
+                        await run_live_evaluation(report_path)
+            saved = json.loads(report_path.read_text())
 
+        expected_mode = {"0": "llm", "1": "hybrid", "2": "system_one"}[mode]
+        self.assertEqual(saved["judge_eval_mode"], expected_mode)
+        self.assertEqual(saved["judge_model"], None if mode == "2" else "judge-model")
         load_cohort.assert_awaited_once_with(session, config)
-        build_judge.assert_called_once_with(
-            api_key="configured-key", base_url=None, config=config
-        )
+        if mode == "2":
+            build_judge.assert_not_called()
+            probe_judge.assert_not_awaited()
+            preflight.assert_called_once_with(None, config, eval_mode="system_one")
+        else:
+            build_judge.assert_called_once_with(
+                api_key="configured-key", base_url=None, config=config
+            )
+            probe_judge.assert_awaited_once_with(judge)
+            preflight.assert_not_called()
+        if outcome == "typesafe_failure":
+            async_openai.assert_not_called()
+            build_answer_model.assert_not_called()
+            run_cases.assert_not_awaited()
+            engine.dispose.assert_awaited_once()
+            self.assertEqual(
+                saved["errors"], [{"stage": "judge_construction", "type": "RuntimeError"}]
+            )
+            self.assertNotIn("secret", json.dumps(saved))
+            return
         build_answer_model.assert_called_once_with(client, config)
         async_openai.assert_called_once_with(api_key="configured-key", max_retries=0)
         async_cohere.assert_called_once_with(api_key="configured-cohere-key")
@@ -649,15 +792,16 @@ class HarnessTests(unittest.IsolatedAsyncioTestCase):
             self.assertIs(entry.args[3], config)
         embedder = retrievers[2]._embedder
         self.assertIs(embedder.client, client)
-        for hybrid in retrievers[3:]:
-            self.assertEqual(hybrid.candidate_top_k, 37)
-            self.assertEqual(hybrid.reranker.model, "configured-reranker")
-            self.assertIs(hybrid.reranker.client, cohere_client)
-            self.assertIs(hybrid.vector._embedder, embedder)
+        for hybrid_retriever in retrievers[3:]:
+            self.assertEqual(hybrid_retriever.candidate_top_k, 37)
+            self.assertEqual(hybrid_retriever.reranker.model, "configured-reranker")
+            self.assertIs(hybrid_retriever.reranker.client, cohere_client)
+            self.assertIs(hybrid_retriever.vector._embedder, embedder)
         self.assertIs(retrievers[3].reranker, retrievers[4].reranker)
         run_cases.assert_awaited_once_with(
-            cohort, dict.fromkeys(names, graph), judge,
+            cohort, dict.fromkeys(names, graph), None if mode == "2" else judge,
             Path(directory) / "results.json", config,
+            eval_mode=expected_mode,
         )
 
     def test_live_collection_is_opt_in_and_does_not_import_database(self):
@@ -718,8 +862,11 @@ class ScoringTests(unittest.IsolatedAsyncioTestCase):
             patch("rag_eval.scoring.ContextualRelevancyMetric") as relevancy,
         ):
             first = build_metrics(judge, config)
-            second = build_metrics(judge, config)
+            second = build_metrics(judge, config, eval_mode="hybrid")
+            third = build_metrics(None, config, eval_mode="system_one")
 
+        self.assertEqual([name for name, _ in first], [name for name, _ in second])
+        self.assertEqual([name for name, _ in first], [name for name, _ in third])
         self.assertEqual(
             [name for name, _metric in first],
             [
@@ -737,9 +884,15 @@ class ScoringTests(unittest.IsolatedAsyncioTestCase):
             recall,
             relevancy,
         ):
-            self.assertEqual(constructor.call_count, 2)
+            self.assertEqual(constructor.call_count, 3)
             constructor.assert_any_call(
-                model=judge, include_reason=True, threshold=0.75
+                model=judge, include_reason=True, threshold=0.75, eval_mode="llm"
+            )
+            constructor.assert_any_call(
+                model=judge, include_reason=True, threshold=0.75, eval_mode="hybrid"
+            )
+            constructor.assert_any_call(
+                model=None, include_reason=True, threshold=0.75, eval_mode="system_one"
             )
 
     async def test_low_score_and_metric_error_are_distinct(self):

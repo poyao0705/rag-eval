@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import json
 import math
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from numbers import Real
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from backend.core.config import DEFAULT_RAG_CONFIG, RAGConfig
+from rag_eval import EvalMode
 from rag_eval.cohort import QAExample
 
 METRICS = (
@@ -23,10 +25,15 @@ METRICS = (
 
 def _validate_retriever_names(retriever_names: Sequence[str]) -> None:
     """Keep pipeline groups from colliding with flat summary metadata."""
-    if set(retriever_names).intersection({
-        "attempted_case_count", "completed_case_count",
-        "failed_case_count", "expected_case_count",
-    }):
+    if set(retriever_names).intersection(
+        {
+            "attempted_case_count",
+            "completed_case_count",
+            "failed_case_count",
+            "expected_case_count",
+            "avg_run_time_seconds",
+        }
+    ):
         raise ValueError("retriever names contain a reserved report key")
 
 
@@ -35,6 +42,7 @@ def new_report(
     config: RAGConfig = DEFAULT_RAG_CONFIG,
     *,
     retriever_names: Sequence[str] = (),
+    judge_eval_mode: EvalMode = "llm",
 ) -> dict[str, Any]:
     """Return an empty report carrying configured evaluation metadata."""
     _validate_retriever_names(retriever_names)
@@ -44,7 +52,9 @@ def new_report(
         "seed": config.evaluation_seed,
         "qa_ids": [qa.id for qa in cohort],
         "generator_model": config.answer_model,
-        "judge_model": config.judge_model,
+        "judge_model": config.judge_model if judge_eval_mode != "system_one" else None,
+        "judge_eval_mode": judge_eval_mode,
+        "total_run_time_seconds": 0.0,
         "top_k": config.top_k,
         "retrievers": list(retriever_names),
         "expected_case_count": len(cohort) * len(retriever_names),
@@ -94,6 +104,8 @@ def case_record(
     state: Mapping[str, Any] | None,
     metrics: list[dict[str, Any]],
     error: dict[str, Any] | None = None,
+    *,
+    run_time_seconds: float | None = None,
 ) -> dict[str, Any]:
     """Create a JSON-safe record for one completed or failed graph case."""
     state = state or {}
@@ -101,6 +113,7 @@ def case_record(
     context = state.get("retrieval_context", [])
     return {
         "qa_id": qa.id,
+        "run_time_seconds": run_time_seconds,
         "retriever": retriever,
         "question": qa.question,
         "expected_answer": qa.answer,
@@ -140,6 +153,19 @@ def summarize(
     }
     attempted = len(cases)
     completed = sum(1 for case in cases if case.get("error") is None)
+    run_times = [
+        float(value)
+        for case in cases
+        if isinstance(value := case.get("run_time_seconds"), Real)
+        and not isinstance(value, bool)
+        and math.isfinite(float(value))
+        and float(value) >= 0
+    ]
+    avg_run_time = (
+        sum(run_times) / attempted
+        if attempted and len(run_times) == attempted
+        else None
+    )
 
     for case in cases:
         retriever = case.get("retriever")
@@ -182,6 +208,7 @@ def summarize(
             "completed_case_count": completed,
             "failed_case_count": attempted - completed,
             "expected_case_count": expected_case_count,
+            "avg_run_time_seconds": avg_run_time,
         }
     )
     return summary

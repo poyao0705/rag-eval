@@ -96,23 +96,30 @@ Run the opt-in live RAG evaluation after preparing the database, passages, and
 embeddings:
 
 ```bash
-RUN_RAG_EVAL=1 uv run pytest tests/test_rag.py -q
+RUN_RAG_EVAL=1 RUN_RAG_EVAL_MODE=0 uv run pytest tests/test_rag.py -q
 ```
 
 The live evaluation requires `DATABASE_URL`, `OPENAI_API_KEY`, and
 `COHERE_API_KEY`. It evaluates the configured retriever graphs sequentially and
-writes the JSON report to:
+writes each JSON report to its own directory:
 
 ```text
-backend/.rag-eval/results.json
+backend/.rag-eval/<UTC timestamp>-<llm|hybrid|system_one>/results.json
 ```
 
-The report contains per-case results and aggregate metrics under `summary`.
+`RUN_RAG_EVAL_MODE=0` (the default) uses an LLM judge; change it to `1` for
+hybrid or `2` for System One. Modes `1` and `2` also require TypeSafe/Jev
+credentials (`TYPESAFE_API_KEY` or `deepeval set-typesafe --prompt-api-key`).
+`RUN_RAG_EVAL_HYBRID` is no longer used. See [`backend/README.md`](backend/README.md)
+for setup and paid-run details.
+
+Each run saves per-case results and runtimes, aggregate metrics under `summary`,
+and heatmaps beside the JSON report.
 
 ### Evaluation method
 
 The evaluation uses [DeepEval](https://deepeval.com/) (`deepeval>=4.2.2`)
-with the configured judge model as an LLM evaluator. Heatmaps use
+with the configured judge mode. Heatmaps use
 [Matplotlib](https://matplotlib.org/) (`matplotlib>=3.11.2`) with its headless
 Agg backend to write static PNGs.
 
@@ -133,8 +140,8 @@ these metrics into one overall score.
 
 ![RAG evaluation summary](docs/assets/rag-evaluation-summary.png)
 
-Snapshot generated from `backend/.rag-eval/results.json`. Regenerate it after
-new evaluations with the offline heatmap command documented in
+Snapshot generated from the legacy `backend/.rag-eval/results.json`.
+Regenerate it from a chosen run with the offline heatmap command documented in
 [`backend/README.md`](backend/README.md).
 
 ### HotpotQA passage sizing

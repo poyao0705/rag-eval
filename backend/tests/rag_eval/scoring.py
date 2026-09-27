@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable
 from numbers import Real
-from typing import Any, Iterable
+from typing import Any
 
 from deepeval.metrics import (
     AnswerRelevancyMetric,
@@ -19,6 +20,7 @@ from pydantic import BaseModel
 
 from backend.core.config import DEFAULT_RAG_CONFIG, RAGConfig
 from backend.modules.rag.graph import RAGState
+from rag_eval import EvalMode
 from rag_eval.cohort import QAExample
 
 
@@ -41,7 +43,10 @@ def build_test_case(qa: QAExample, state: RAGState) -> LLMTestCase:
 
 
 def build_metrics(
-    judge: Any, config: RAGConfig = DEFAULT_RAG_CONFIG
+    judge: Any,
+    config: RAGConfig = DEFAULT_RAG_CONFIG,
+    *,
+    eval_mode: EvalMode = "llm",
 ) -> list[tuple[str, BaseMetric]]:
     """Create fresh configured metric instances for one test case."""
     metric_types = (
@@ -58,6 +63,7 @@ def build_metrics(
                 model=judge,
                 include_reason=True,
                 threshold=config.evaluation_metric_threshold,
+                eval_mode=eval_mode,
             ),
         )
         for key, metric_type in metric_types

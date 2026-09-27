@@ -11,7 +11,9 @@ from pathlib import Path
 from typing import Any
 
 from matplotlib import colormaps  # pyright: ignore[reportMissingImports]
-from matplotlib.backends.backend_agg import FigureCanvasAgg  # pyright: ignore[reportMissingImports]
+from matplotlib.backends.backend_agg import (
+    FigureCanvasAgg,  # pyright: ignore[reportMissingImports]
+)
 from matplotlib.figure import Figure  # pyright: ignore[reportMissingImports]
 
 from rag_eval.report import METRICS, summarize
@@ -19,9 +21,12 @@ from rag_eval.report import METRICS, summarize
 
 def _axis(report: Mapping[str, Any], name: str) -> list[str]:
     values = report.get(name)
-    if not isinstance(values, list) or not values or any(
-        not isinstance(value, str) or not value for value in values
-    ) or len(set(values)) != len(values):
+    if (
+        not isinstance(values, list)
+        or not values
+        or any(not isinstance(value, str) or not value for value in values)
+        or len(set(values)) != len(values)
+    ):
         raise ValueError(f"report {name} must be a non-empty list of unique strings")
     return values
 
@@ -45,7 +50,11 @@ def _matrices(
     qa_ids = _axis(report, "qa_ids")
     cases = report.get("cases")
     expected = report.get("expected_case_count")
-    if not isinstance(cases, list) or not isinstance(expected, int) or isinstance(expected, bool):
+    if (
+        not isinstance(cases, list)
+        or not isinstance(expected, int)
+        or isinstance(expected, bool)
+    ):
         raise ValueError("report cases and expected_case_count have invalid types")
     if expected < 0:
         raise ValueError("report expected_case_count must not be negative")
@@ -67,7 +76,9 @@ def _matrices(
             raise ValueError("case metrics must be a list")
         metric_names: set[str] = set()
         for metric in metrics:
-            if not isinstance(metric, Mapping) or not isinstance(metric.get("name"), str):
+            if not isinstance(metric, Mapping) or not isinstance(
+                metric.get("name"), str
+            ):
                 raise ValueError("metrics must contain named objects")
             name = metric["name"]
             if name in metric_names:
@@ -105,9 +116,7 @@ def _matrices(
             )
             score = _valid_score(metric.get("score"))
             row.append(
-                score
-                if score is not None and metric.get("error") is None
-                else math.nan
+                score if score is not None and metric.get("error") is None else math.nan
             )
         recall.append(row)
     return summary, aggregate, recall
@@ -134,7 +143,7 @@ def _metadata(report: Mapping[str, Any], summary: Mapping[str, Any]) -> str:
         f"{report.get('timestamp', 'unknown')} | seed {report.get('seed', 'unknown')} | "
         f"top_k {report.get('top_k', 'unknown')}\n"
         f"generator {report.get('generator_model', 'unknown')} | "
-        f"judge {report.get('judge_model', 'unknown')}"
+        f"judge {report.get('judge_model') or report.get('judge_eval_mode', 'unknown')}"
     )
 
 
@@ -171,11 +180,7 @@ def _heatmap(
                 ha="center",
                 va="center",
                 fontsize=8,
-                color=(
-                    "white"
-                    if math.isfinite(value) and value < 0.5
-                    else "black"
-                ),
+                color=("white" if math.isfinite(value) and value < 0.5 else "black"),
             )
     figure.colorbar(image, ax=axes, label="Score (0–1; gray = unavailable)")
     return figure

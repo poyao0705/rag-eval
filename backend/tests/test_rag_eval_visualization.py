@@ -141,6 +141,12 @@ class MatrixTests(unittest.TestCase):
 
 
 class RenderingTests(unittest.TestCase):
+    def test_system_one_chart_does_not_label_the_judge_none(self) -> None:
+        report = {**sample_report(), "judge_model": None, "judge_eval_mode": "system_one"}
+        summary, recall = build_figures(report)
+        self.assertIn("judge system_one", summary.axes[0].get_title())
+        self.assertIn("judge system_one", recall.axes[0].get_title())
+
     def test_figure_semantics(self) -> None:
         summary, recall = build_figures(sample_report())
         self.assertEqual(summary.axes[0].images[0].get_clim(), (0.0, 1.0))
@@ -239,12 +245,11 @@ class RenderingTests(unittest.TestCase):
             temporary = source.with_suffix(".summary.tmp")
             temporary.write_bytes(b"stale")
             before = source.read_bytes()
-            with patch(
-                "rag_eval.visualize.Figure.savefig",
-                side_effect=OSError("disk full"),
+            with (
+                patch("rag_eval.visualize.Figure.savefig", side_effect=OSError("disk full")),
+                self.assertRaisesRegex(OSError, "disk full"),
             ):
-                with self.assertRaisesRegex(OSError, "disk full"):
-                    render_report(source)
+                render_report(source)
             self.assertEqual(source.read_bytes(), before)
             self.assertFalse(temporary.exists())
 
@@ -291,30 +296,36 @@ class CollectionTests(unittest.TestCase):
 
 class LiveChartHookTests(unittest.IsolatedAsyncioTestCase):
     async def test_renders_only_after_success(self) -> None:
-        from test_rag import DEFAULT_REPORT_PATH, TestRAGEvaluation
+        from test_rag import TestRAGEvaluation
 
         events: list[str] = []
+        report_path = Path("synthetic-run/results.json")
 
-        async def evaluate() -> dict:
+        async def evaluate(path: Path) -> dict:
+            self.assertEqual(path, report_path)
             events.append("evaluation")
             return {}
 
         def render(path: Path) -> tuple[Path, Path]:
-            self.assertEqual(path, DEFAULT_REPORT_PATH)
+            self.assertEqual(path, report_path)
             events.append("render")
             return (path, path)
 
         with (
+            patch.dict(os.environ, {"RUN_RAG_EVAL_MODE": "2"}),
+            patch("test_rag._new_run_report_path", return_value=report_path) as create_path,
             patch("test_rag.run_live_evaluation", side_effect=evaluate),
             patch("rag_eval.visualize.render_report", side_effect=render),
         ):
             await TestRAGEvaluation("test_live_evaluation").test_live_evaluation()
+        create_path.assert_called_once_with("system_one")
         self.assertEqual(events, ["evaluation", "render"])
 
     async def test_evaluation_failure_does_not_render(self) -> None:
         from test_rag import TestRAGEvaluation
 
         with (
+            patch("test_rag._new_run_report_path", return_value=Path("synthetic-run/results.json")),
             patch(
                 "test_rag.run_live_evaluation",
                 new=AsyncMock(side_effect=RuntimeError("evaluation failed")),
@@ -329,6 +340,8 @@ class LiveChartHookTests(unittest.IsolatedAsyncioTestCase):
         from test_rag import TestRAGEvaluation
 
         with patch(
+            "test_rag._new_run_report_path", return_value=Path("synthetic-run/results.json")
+        ), patch(
             "test_rag.run_live_evaluation", new=AsyncMock(return_value={})
         ) as evaluate, patch(
             "rag_eval.visualize.render_report", side_effect=OSError("disk full")

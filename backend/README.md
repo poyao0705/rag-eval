@@ -80,7 +80,19 @@ The caller-owned client is a configured `cohere.AsyncClientV2` using
 ## RAG evaluation
 
 The evaluation is offline by default. The paid harness is gated by
-`RUN_RAG_EVAL=1` and writes its report to `backend/.rag-eval/results.json`.
+`RUN_RAG_EVAL=1` and writes each report under
+`backend/.rag-eval/<UTC timestamp>-<llm|hybrid|system_one>/results.json`.
+The directory is reserved before the run; a timestamp collision fails rather
+than overwriting existing results. The old `.rag-eval/results.json` is untouched.
+Set `RUN_RAG_EVAL_MODE=0` (or leave it unset) for LLM judging, `1` for hybrid,
+or `2` for System One (TypeSafe/Jev only). Other values fail before paid calls;
+`RUN_RAG_EVAL_HYBRID` is no longer used. The report records
+`judge_eval_mode`, each attempted case's `run_time_seconds`, the evaluation
+loop's `total_run_time_seconds`, and `summary.avg_run_time_seconds` (the mean
+of full-case durations). Case timing includes retrieval, generation, and
+judging; the total includes report writes between cases but not setup or PNG
+rendering. Failed cases retain their elapsed time. Each run keeps its own JSON
+and heatmaps, including a partial JSON when setup or scoring fails.
 It evaluates the configured validation cohort sequentially with `bm25`,
 `tsvector`, `vector`, `hybrid_bm25`, and `hybrid_tsvector`, in that insertion order.
 Adding or removing a graph entry automatically changes execution and reporting;
@@ -92,13 +104,17 @@ Pipeline names may not be `attempted_case_count`, `completed_case_count`,
 `failed_case_count`, or `expected_case_count`: these flat report keys are
 reserved and rejected before execution or summary grouping.
 
-Before a paid run, verify that the configured provider supports
+For LLM and hybrid judging, verify that the configured provider supports
 `RAG_EVAL_JUDGE_MODEL` and its structured-output interface. The harness uses
 DeepEval's stock `OpenAIModel`, including native schema parsing, and does not
-silently substitute another model. Provider compatibility or availability
-failures are configuration blockers. The existing BM25 index migration also
-requires explicit operator authorization. Do not put credentials in reports or
-command output.
+silently substitute another model. Hybrid and System One require TypeSafe/Jev
+credentials (`TYPESAFE_API_KEY` or `deepeval set-typesafe --prompt-api-key`).
+System One skips the OpenAI judge and probe and checks TypeSafe configuration
+before generation; `judge_model` is null in its report. The OpenAI generator,
+retrieval embeddings, and Cohere reranker still need their own credentials.
+Provider compatibility or availability failures are configuration blockers.
+The existing BM25 index migration also requires explicit operator
+authorization. Do not put credentials in reports or command output.
 
 The cohort uses `RAG_EVAL_SEED` and a stable database hash, so it is repeatable
 when eligible database contents are unchanged. This does not make LLM output
@@ -117,16 +133,15 @@ Successful paid runs also write two local PNGs beside the JSON report:
 retriever. Gray `N/A` cells mean no valid measurement; they are not zero.
 Counts show valid measurements behind each aggregate mean. Faithfulness remains
 separate from answer correctness, and the 20-question cohort is exploratory.
-If image writing fails after evaluation, rerun the offline renderer rather than
-rerunning paid evaluation. Images from an older run can remain after a failed
-run, so compare their metadata with the JSON timestamp.
+If image writing fails after evaluation, rerun the offline renderer against
+that run's JSON rather than rerunning paid evaluation.
 
 ```bash
 # Offline: no opt-in, no paid calls.
 cd backend
 uv sync --locked
-# Regenerate heatmaps from saved JSON; no model or database calls.
-PYTHONPATH=tests uv run python -m rag_eval.visualize .rag-eval/results.json
+# Regenerate heatmaps from a saved run; replace the example directory.
+PYTHONPATH=tests uv run python -m rag_eval.visualize .rag-eval/2026-09-27T10-34-03.895449Z-hybrid/results.json
 # Offline chart tests use synthetic reports.
 RUN_RAG_EVAL=0 uv run pytest tests/test_rag_eval_visualization.py -q
 uv run pytest tests/test_rag_graph.py tests/test_rag_eval_helpers.py tests/test_rag_eval_scoring.py tests/test_rag.py -q
@@ -136,6 +151,8 @@ uv run alembic current
 uv run alembic upgrade b2c3d4e5f6a7
 
 # Paid: only after provider compatibility and explicit evaluation authorization.
-# Success writes results.json plus both heatmaps under .rag-eval/.
-RUN_RAG_EVAL=1 uv run pytest tests/test_rag.py -q
+# Success writes results.json plus both heatmaps in a new timestamped directory.
+RUN_RAG_EVAL=1 RUN_RAG_EVAL_MODE=0 uv run pytest tests/test_rag.py -q  # LLM judge
+RUN_RAG_EVAL=1 RUN_RAG_EVAL_MODE=1 uv run pytest tests/test_rag.py -q  # Hybrid judge
+RUN_RAG_EVAL=1 RUN_RAG_EVAL_MODE=2 uv run pytest tests/test_rag.py -q  # System One
 ```

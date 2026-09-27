@@ -1,15 +1,12 @@
+import unittest
+import uuid
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass
 from io import StringIO
 from types import SimpleNamespace
-import unittest
-import uuid
 
-from backend.scripts.embeddings import (
-    EMBEDDING_DIMENSIONS,
-    EMBEDDING_MODEL,
-    embed_passages,
-)
+from backend.modules.retrieval.embeddings import EMBEDDING_DIMENSIONS
+from backend.scripts.embeddings import EMBEDDING_MODEL, embed_passages
 
 
 @dataclass

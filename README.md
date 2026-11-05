@@ -144,6 +144,38 @@ Snapshot generated from the legacy `backend/.rag-eval/results.json`.
 Regenerate it from a chosen run with the offline heatmap command documented in
 [`backend/README.md`](backend/README.md).
 
+### HotpotQA example
+
+This example comes from the [HotpotQA distractor validation split](https://huggingface.co/datasets/hotpotqa/hotpot_qa/viewer/distractor/validation?row=0), shown in the [official JSON format](https://github.com/hotpotqa/hotpot#json-format). The context is shortened to the two supporting sentences; other sentences and distractor paragraphs are omitted.
+
+```json
+{
+  "_id": "5a8b57f25542995d1e6f1371",
+  "question": "Were Scott Derrickson and Ed Wood of the same nationality?",
+  "answer": "yes",
+  "type": "comparison",
+  "level": "hard",
+  "supporting_facts": [
+    ["Scott Derrickson", 0],
+    ["Ed Wood", 0]
+  ],
+  "context": [
+    [
+      "Scott Derrickson",
+      ["Scott Derrickson (born July 16, 1966) is an American director, screenwriter and producer."]
+    ],
+    [
+      "Ed Wood",
+      ["Edward Davis Wood Jr. (October 10, 1924 – December 10, 1978) was an American filmmaker, actor, writer, producer, and director."]
+    ]
+  ]
+}
+```
+
+The answer is `yes` because both passages identify the directors as American. Each `supporting_facts` entry is `[title, sentence_index]`, with zero-based sentence indices; each `context` entry is `[title, sentences]`.
+
+HotpotQA data is distributed under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/).
+
 ### HotpotQA passage sizing
 
 Measured from the `hotpotqa/hotpot_qa` dataset using the `distractor` configuration across the train and validation splits. A passage is one context document with its sentences joined together; word counts use whitespace splitting.
